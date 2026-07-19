@@ -419,7 +419,8 @@ function Integration:RemoveEntry(entry, noRefresh)
                 for recordedSpellID, triggers in pairs(type(spells) == "table" and spells or {}) do
                     for recordedTrigger, record in pairs(type(triggers) == "table" and triggers or {}) do
                         local uidMatches = entryUID ~= "" and tostring(type(record) == "table" and record.entryUID or "") == entryUID
-                        local legacyMatches = tonumber(recordedSpellID) == spellID and tostring(recordedTrigger) == trigger
+                        local recordUID = tostring(type(record) == "table" and record.entryUID or "")
+                        local legacyMatches = recordUID == "" and tonumber(recordedSpellID) == spellID and tostring(recordedTrigger) == trigger
                         if type(record) == "table" and (uidMatches or legacyMatches) then
                             found = true
                             local target = ResolveRecordedTarget(root, profileKey, specKey, tonumber(recordedSpellID), record)

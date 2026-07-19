@@ -127,9 +127,9 @@ function Registry:RegisterAllSavedEntries()
         for _, entries in pairs(type(classMap) == "table" and classMap or {}) do
             for _, entry in pairs(type(entries) == "table" and entries or {}) do
                 if type(entry) == "table" and entry.entryType == "euiVoice" and entry.voiceEnabled ~= false then
-                    local value, status = self:RegisterEntry(entry)
+                    local value = self:RegisterEntry(entry)
                     if value then registered = registered + 1 end
-                    if status == "requires_reload" then reloadRequired = reloadRequired + 1 end
+                    if self:GetNativeReadiness(entry) == "requires_reload" then reloadRequired = reloadRequired + 1 end
                 end
             end
         end

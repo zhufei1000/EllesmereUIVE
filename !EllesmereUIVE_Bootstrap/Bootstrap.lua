@@ -237,6 +237,7 @@ local function ResolveTarget(context, entry, spellID, create)
 end
 
 local function PreseedEntry(entry, classID, specID)
+    if InCombatLockdown and InCombatLockdown() then return false, "waiting_combat" end
     if type(entry) ~= "table" or entry.entryType ~= "euiVoice" then return false, "unsupported_entry_type" end
     if entry.enabled == false or entry.voiceEnabled == false then return false, "disabled" end
     if not ScopeIsCurrent(classID, specID) then return false, "waiting_for_spec" end
@@ -264,6 +265,11 @@ local function PreseedEntry(entry, classID, specID)
         if type(record) == "table" and current ~= record.injectedValue and not IsOwned(current) then previousValue = current end
         local fieldChanged = current ~= injectedValue
         if fieldChanged then target[field] = injectedValue end
+        local registeredBeforeEUI = API.IsSoundRegisteredBeforeEUI(soundKey)
+        local beforeCDM = not AddOnLoaded("EllesmereUICooldownManager")
+        local triggerFamily = (trigger == "buffGain" or trigger == "buffLoss") and "buff" or "cd"
+        local nativeReady = beforeCDM or entry.preseededBeforeCDM == true
+            or (registeredBeforeEUI and NS.Runtime.armedFamilies[triggerFamily] == true)
         records[trigger] = {
             entryUID = tostring(entry.entryUID or ""),
             profileKey = context.profileKey,
@@ -278,13 +284,15 @@ local function PreseedEntry(entry, classID, specID)
             family = family,
             field = field,
             customStateKey = family == "customActiveStates" and actualKey or nil,
-            registeredBeforeEUI = API.IsSoundRegisteredBeforeEUI(soundKey),
-            requiresReload = false,
+            registeredBeforeEUI = registeredBeforeEUI,
+            requiresReload = not nativeReady,
         }
-        entry.registeredBeforeEUI = API.IsSoundRegisteredBeforeEUI(soundKey)
-        entry.preseededBeforeCDM = not AddOnLoaded("EllesmereUICooldownManager")
-        entry.requiresReload = false
-        return fieldChanged, family == "customActiveStates" and "custom_state_injected" or "preseeded"
+        entry.registeredBeforeEUI = registeredBeforeEUI
+        entry.preseededBeforeCDM = beforeCDM or entry.preseededBeforeCDM == true
+        entry.requiresReload = not nativeReady
+        local finalStatus = not nativeReady and "requires_reload"
+            or (family == "customActiveStates" and "custom_state_injected" or (beforeCDM and "preseeded" or "native_ready"))
+        return fieldChanged, finalStatus
     end)
     if not ok then return false, "unsupported_structure" end
     return true, status, changed == true

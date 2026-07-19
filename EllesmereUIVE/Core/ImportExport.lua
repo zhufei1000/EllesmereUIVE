@@ -25,6 +25,7 @@ local function ExportEntry(entry, classID, specID)
         spellName = entry.spellName,
         objectType = entry.objectType,
         euiTriggerType = entry.euiTriggerType,
+        euiTargetFamily = entry.euiTargetFamily,
         soundSource = entry.soundSource,
         soundPath = entry.soundPath,
         builtinSoundPath = entry.builtinSoundPath,
@@ -147,6 +148,11 @@ local function ImportEntry(source, forcedType)
         if trigger ~= "cdReady" and trigger ~= "buffGain" and trigger ~= "buffLoss" then return nil end
         if source.soundSource == "tts" or source.notifyMode == "tts" then return nil end
         entry.euiTriggerType = trigger
+        local family = tostring(source.euiTargetFamily or "")
+        if family ~= "cd" and family ~= "buff" and family ~= "custom" then
+            family = (trigger == "buffGain" or trigger == "buffLoss") and "buff" or "cd"
+        end
+        entry.euiTargetFamily = family
     else
         entry.triggerSpellID = tonumber(source.triggerSpellID) or spellID
         entry.delayEnabled = source.delayEnabled == true
@@ -209,11 +215,17 @@ function ImportExport:ImportPayload(payload)
             end
         end
     end
-    NS.Core.EUISoundRegistry:RegisterAllSavedEntries()
+    local _, reloadRequired = NS.Core.EUISoundRegistry:RegisterAllSavedEntries()
+    local bridge = NS.Core and NS.Core.BootstrapBridge
+    if bridge and not (InCombatLockdown and InCombatLockdown()) then bridge:PreseedCurrentScope() end
     NS:RebuildVoiceRuntime()
     NS.pendingEUIRefresh = removalChanged or NS.pendingEUIRefresh
     NS:RequestEUISync("IMPORT")
-    return true, added
+    if (tonumber(reloadRequired) or 0) > 0 then
+        if NS.NotifyReloadRequiredOnce then NS:NotifyReloadRequiredOnce() end
+        return true, added, "requires_reload"
+    end
+    return true, added, "native_ready"
 end
 
 function ImportExport:ImportText(text)
