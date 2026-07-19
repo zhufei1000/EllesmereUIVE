@@ -287,7 +287,8 @@ function MainFrame:BuildEUIPanel(parent)
         local saved, status, ok = NS:SaveEntry(entry, panel.editingEntry, classID, specID, injectNow)
         if not saved then SetStatus(panel, status == "duplicate" and NS.L("DUPLICATE_ENTRY") or NS.L("SAVE_FAILED")); return end
         panel.editingEntry = saved
-        SetStatus(panel, NS.L("STATUS_" .. tostring(status)), ok and status ~= "requires_reload")
+        SetStatus(panel, NS.L("STATUS_" .. tostring(status)), ok and status ~= "requires_reload"
+            and status ~= "waiting_for_eui_custom_state")
         MainFrame:Refresh()
     end
 
@@ -318,7 +319,8 @@ function MainFrame:BuildEUIPanel(parent)
             root:CreateButton(NS.L("EDIT"), function() edit(entry) end)
             root:CreateButton(NS.L("INJECT_NOW"), function()
                 local ok, status = NS:InjectSavedEntry(entry)
-                SetStatus(panel, NS.L("STATUS_" .. tostring(status)), ok and status ~= "requires_reload"); MainFrame:Refresh()
+                SetStatus(panel, NS.L("STATUS_" .. tostring(status)), ok and status ~= "requires_reload"
+                    and status ~= "waiting_for_eui_custom_state"); MainFrame:Refresh()
             end)
             root:CreateButton(NS.L("REMOVE_INJECTION"), function()
                 local ok, status = NS.Integrations.EllesmereUI:RemoveEntry(entry)

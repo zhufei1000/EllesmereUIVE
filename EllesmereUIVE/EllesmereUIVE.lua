@@ -228,6 +228,7 @@ function NS:SaveEntry(draft, existing, classID, specID, injectNow)
             saved.injectionStatus = status
             if status == "requires_reload" then self:NotifyReloadRequiredOnce() end
             return saved, status, ok or status == "requires_reload" or status == "native_ready" or status == "preseeded"
+                or status == "waiting_for_eui_custom_state"
         elseif saved.enabled ~= false and injectNow then
             if oldInjectionChanged then integration:Refresh() end
             return saved, "waiting_for_spec", true
@@ -275,7 +276,8 @@ function NS:InjectSavedEntry(entry)
     if classID == nil or not ScopeIsCurrent(classID, specID) then return false, "waiting_for_spec" end
     local ok, status = self.Integrations.EllesmereUI:InjectEntry(entry, EllesmereUIVEDB.settings.overwriteEUI == true)
     if status == "requires_reload" then self:NotifyReloadRequiredOnce() end
-    return ok or status == "requires_reload" or status == "native_ready" or status == "preseeded", status
+    return ok or status == "requires_reload" or status == "native_ready" or status == "preseeded"
+        or status == "waiting_for_eui_custom_state", status
 end
 
 local reloadNoticeShown = false
