@@ -75,18 +75,6 @@ local function ResolveContext(create)
     }
 end
 
-local function EnsureCDMProfile(context)
-    local root = context.root
-    root.profiles = type(root.profiles) == "table" and root.profiles or {}
-    root.profiles[context.profileKey] = type(root.profiles[context.profileKey]) == "table" and root.profiles[context.profileKey] or {}
-    local profile = root.profiles[context.profileKey]
-    profile.addons = type(profile.addons) == "table" and profile.addons or {}
-    profile.addons.EllesmereUICooldownManager = type(profile.addons.EllesmereUICooldownManager) == "table"
-        and profile.addons.EllesmereUICooldownManager or {}
-    context.cdmProfile = profile.addons.EllesmereUICooldownManager
-    return context.cdmProfile
-end
-
 local function DecodeManagedID(value)
     value = tonumber(value)
     if not value then return nil end
@@ -126,17 +114,32 @@ local function FindCustomState(context, spellID)
     return nil, nil, states
 end
 
-local function ResolveFamily(context, entry, spellID)
+local function IsForcedTarget(entry)
+    if tostring(entry and entry.euiTargetMode or "") ~= "forced" then return false end
+    local family = tostring(entry and entry.euiTargetFamily or "")
+    return family == "cd" or family == "buff" or family == "custom"
+end
+
+-- Keep this target-family resolution algorithm synchronized with:
+-- !EllesmereUIVE_Bootstrap/Bootstrap.lua
+local function ResolveTargetFamily(context, entry, spellID)
     local trigger = tostring(entry.euiTriggerType or "cdReady")
-    local explicit = tostring(entry.euiTargetFamily or "")
+    local family = tostring(entry.euiTargetFamily or "auto")
+    local forced = IsForcedTarget(entry)
     if trigger == "buffGain" or trigger == "buffLoss" then
-        if explicit == "custom" then return nil, "unsupported_entry_type" end
-        return explicit == "cd" and "spellSettingsCD" or "spellSettingsBuff"
+        if forced then
+            if family == "custom" then return nil, "unsupported_entry_type" end
+            if family == "cd" then return "spellSettingsCD" end
+            if family == "buff" then return "spellSettingsBuff" end
+        end
+        return "spellSettingsBuff"
     end
-    local custom = FindCustomState(context, spellID)
-    if explicit == "custom" or (custom and explicit ~= "buff") then return "customActiveStates" end
-    if explicit == "buff" then return "spellSettingsBuff" end
-    if explicit == "cd" then return "spellSettingsCD" end
+    if forced then
+        if family == "custom" then return "customActiveStates" end
+        if family == "buff" then return "spellSettingsBuff" end
+        if family == "cd" then return "spellSettingsCD" end
+    end
+    if FindCustomState(context, spellID) then return "customActiveStates" end
     local foundCD, foundBuff = DiscoverFamilies(context.specProfile, spellID)
     if foundCD then return "spellSettingsCD" end
     if foundBuff then return "spellSettingsBuff" end
@@ -145,14 +148,8 @@ end
 
 local function ResolveTarget(context, family, spellID, create)
     if family == "customActiveStates" then
-        local target, key, states = FindCustomState(context, spellID)
-        if not target and create then
-            local cdm = EnsureCDMProfile(context)
-            cdm.customActiveStates = type(cdm.customActiveStates) == "table" and cdm.customActiveStates or {}
-            states, key = cdm.customActiveStates, spellID
-            states[key] = {}
-            target = states[key]
-        end
+        local target, key = FindCustomState(context, spellID)
+        if not target then return nil, nil, "waiting_for_eui_custom_state" end
         return target, key
     end
     local specProfile = context.specProfile
@@ -246,14 +243,15 @@ local function BuildPlan(self, context, entry, overwrite)
     local trigger = tostring(entry.euiTriggerType or "cdReady")
     local field = FIELD_BY_TRIGGER[trigger]
     if not spellID or spellID <= 0 or not field then return nil, "unsupported_entry_type" end
-    local family, familyStatus = ResolveFamily(context, entry, spellID)
+    local family, familyStatus = ResolveTargetFamily(context, entry, spellID)
     if not family then return nil, familyStatus end
     if family == "customActiveStates" and trigger ~= "cdReady" then return nil, "unsupported_entry_type" end
     local injectedValue, registerStatus, mediaChanged = self:RegisterEntrySound(entry)
     if not injectedValue then return nil, registerStatus end
     local readiness = NS.Core.EUISoundRegistry:GetNativeReadiness(entry)
     if readiness == "invalid_path" or readiness == "sharedmedia_missing" then return nil, readiness end
-    local target, actualKey = ResolveTarget(context, family, spellID, false)
+    local target, actualKey, targetStatus = ResolveTarget(context, family, spellID, false)
+    if targetStatus then return nil, targetStatus end
     local current = type(target) == "table" and rawget(target, field) or nil
     local records = GetRecordTable(context.profileKey, context.specKey, spellID, false)
     local record = records and records[trigger] or nil
@@ -279,11 +277,37 @@ local function BuildPlan(self, context, entry, overwrite)
     }, status
 end
 
+local function ResolveCurrentRecordTarget(context, record, spellID)
+    if type(record) ~= "table" then return nil end
+    if record.family == "customActiveStates" then
+        local states = type(context.cdmProfile) == "table" and context.cdmProfile.customActiveStates or nil
+        if type(states) ~= "table" then return nil end
+        local key = record.customStateKey
+        return type(states[key]) == "table" and states[key]
+            or (type(states[spellID]) == "table" and states[spellID])
+            or (type(states[tostring(spellID)]) == "table" and states[tostring(spellID)]) or nil
+    end
+    local store = type(context.specProfile) == "table" and context.specProfile[record.family] or nil
+    return type(store) == "table" and (store[spellID] or store[tostring(spellID)]) or nil
+end
+
 local function ApplyPlan(context, plan)
-    local target, actualKey = ResolveTarget(context, plan.family, plan.spellID, true)
-    if type(target) ~= "table" then return false end
-    local previousValue = type(plan.record) == "table" and plan.record.previousValue or plan.current
-    if type(plan.record) == "table" and plan.current ~= plan.record.injectedValue and not IsOwnedValue(plan.current) then
+    local target, actualKey, targetStatus = ResolveTarget(context, plan.family, plan.spellID, true)
+    if type(target) ~= "table" then return false, targetStatus or "unsupported_structure" end
+    local sameRecordedTarget = type(plan.record) == "table" and plan.record.family == plan.family
+        and plan.record.field == plan.field
+        and (plan.family ~= "customActiveStates" or plan.record.customStateKey == nil
+            or plan.record.customStateKey == actualKey)
+    local staleChanged = false
+    if type(plan.record) == "table" and not sameRecordedTarget then
+        local oldTarget = ResolveCurrentRecordTarget(context, plan.record, plan.spellID)
+        if type(oldTarget) == "table" and oldTarget[plan.record.field] == plan.record.injectedValue then
+            oldTarget[plan.record.field] = plan.record.previousValue
+            staleChanged = true
+        end
+    end
+    local previousValue = sameRecordedTarget and plan.record.previousValue or plan.current
+    if sameRecordedTarget and plan.current ~= plan.record.injectedValue and not IsOwnedValue(plan.current) then
         previousValue = plan.current
     end
     if plan.fieldChanged then target[plan.field] = plan.injectedValue end
@@ -298,7 +322,7 @@ local function ApplyPlan(context, plan)
         soundKey = plan.injectedValue,
         previousValue = previousValue,
         injectedValue = plan.injectedValue,
-        injectedAtVersion = NS.VERSION or "1.0.1",
+        injectedAtVersion = NS.VERSION or "1.0.2",
         family = plan.family,
         field = plan.field,
         customStateKey = plan.family == "customActiveStates" and (actualKey or plan.actualKey) or nil,
@@ -306,7 +330,7 @@ local function ApplyPlan(context, plan)
         requiresReload = plan.requiresReload,
     }
     plan.entry.requiresReload = plan.requiresReload
-    return plan.fieldChanged == true or plan.mediaChanged == true
+    return staleChanged or plan.fieldChanged == true or plan.mediaChanged == true, nil
 end
 
 local function NewStats()
@@ -316,7 +340,8 @@ end
 local function CountStatus(stats, status)
     if status == "native_ready" or status == "preseeded" or status == "custom_state_injected" then stats.injected = stats.injected + 1
     elseif status == "up_to_date" then stats.upToDate = stats.upToDate + 1
-    elseif status == "waiting_for_eui" or status == "waiting_for_spec" or status == "waiting_combat" or status == "saved_waiting_sync" then stats.waiting = stats.waiting + 1
+    elseif status == "waiting_for_eui" or status == "waiting_for_spec" or status == "waiting_for_eui_custom_state"
+        or status == "waiting_combat" or status == "saved_waiting_sync" then stats.waiting = stats.waiting + 1
     elseif status == "requires_reload" then stats.reloadRequired = stats.reloadRequired + 1
     elseif status == "conflict" then stats.conflict = stats.conflict + 1
     elseif status == "invalid_path" or status == "sharedmedia_missing" then stats.invalidSound = stats.invalidSound + 1
@@ -340,7 +365,8 @@ function Integration:InjectEntry(entry, overwrite, noRefresh)
         if not context then return false, contextStatus, false end
         local plan, planStatus = BuildPlan(self, context, entry, overwrite)
         if not plan then return false, planStatus, false end
-        local applied = ApplyPlan(context, plan)
+        local applied, applyStatus = ApplyPlan(context, plan)
+        if applyStatus then return false, applyStatus, false end
         if applied and not plan.requiresReload and not noRefresh then self:Refresh() end
         return true, planStatus, applied
     end)
@@ -369,7 +395,11 @@ function Integration:InjectAll(entries, overwrite)
         end
         local changed, liveChanged = false, false
         for _, plan in ipairs(plans) do
-            local applied = ApplyPlan(context, plan)
+            local applied, applyStatus = ApplyPlan(context, plan)
+            if applyStatus then
+                output[plan.entry] = applyStatus
+                CountStatus(stats, applyStatus)
+            end
             changed = applied or changed
             if applied and not plan.requiresReload then liveChanged = true end
         end
@@ -457,9 +487,10 @@ function Integration:GetInjectionStatus(entry)
     local spellID = tonumber(entry.spellId)
     local trigger = tostring(entry.euiTriggerType or "cdReady")
     local field = FIELD_BY_TRIGGER[trigger]
-    local family, familyStatus = ResolveFamily(context, entry, spellID)
+    local family, familyStatus = ResolveTargetFamily(context, entry, spellID)
     if not family then return familyStatus end
-    local target = ResolveTarget(context, family, spellID, false)
+    local target, _, targetStatus = ResolveTarget(context, family, spellID, false)
+    if targetStatus then return targetStatus end
     local value = type(target) == "table" and target[field] or nil
     local records = GetRecordTable(context.profileKey, context.specKey, spellID, false)
     local record = records and records[trigger] or nil
@@ -492,9 +523,11 @@ function Integration:FindManagedTarget(spellID, trigger, entry)
     local context, status = ResolveContext(false)
     if not context then return nil, status end
     entry = entry or { euiTriggerType = trigger or "cdReady" }
-    local family, familyStatus = ResolveFamily(context, entry, tonumber(spellID))
+    local family, familyStatus = ResolveTargetFamily(context, entry, tonumber(spellID))
     if not family then return nil, familyStatus end
-    return ResolveTarget(context, family, tonumber(spellID), false), family
+    local target, _, targetStatus = ResolveTarget(context, family, tonumber(spellID), false)
+    if targetStatus then return nil, targetStatus end
+    return target, family
 end
 
-Integration.ResolveFamily = ResolveFamily
+Integration.ResolveFamily = ResolveTargetFamily

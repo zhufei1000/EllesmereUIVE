@@ -5,7 +5,7 @@ _G.EllesmereUIVENS = NS
 _G.EllesmereUIVE = NS
 _G.EUIVE = NS
 
-NS.VERSION = "1.0.1"
+NS.VERSION = "1.0.2"
 NS.ADDON_NAME = "EllesmereUIVE"
 NS.ADDON_CHAT_PREFIX = "|cff25d5a4[EUIVE]|r"
 NS.CONFIG_ADDON_NAME = "EllesmereUIVE_Config"
@@ -140,16 +140,10 @@ end
 
 function NS:AddEntry(classID, specID, entry)
     if type(entry) ~= "table" or self:FindDuplicate(classID, specID, entry) then return nil, "duplicate" end
+    self.Core.Database:NormalizeEUITarget(entry)
     entry.entryUID = entry.entryUID or self.Core.Database:NextEntryUID()
     entry.entryUID = tostring(entry.entryUID)
     entry.classID, entry.specID = tonumber(classID) or 0, tonumber(specID) or 0
-    if entry.entryType == "euiVoice" then
-        local trigger = tostring(entry.euiTriggerType or "cdReady")
-        local family = tostring(entry.euiTargetFamily or "")
-        if family ~= "cd" and family ~= "buff" and family ~= "custom" then
-            entry.euiTargetFamily = (trigger == "buffGain" or trigger == "buffLoss") and "buff" or "cd"
-        end
-    end
     entry.injected, entry.injectionStatus = nil, nil
     local list = self:GetScopeList(classID, specID, true)
     list[#list + 1] = entry
@@ -163,6 +157,7 @@ local function SnapshotEntry(entry)
         spellId = entry.spellId,
         objectType = entry.objectType,
         euiTriggerType = entry.euiTriggerType,
+        euiTargetMode = entry.euiTargetMode,
         euiTargetFamily = entry.euiTargetFamily,
         soundSource = entry.soundSource,
         soundPath = entry.soundPath,
@@ -184,6 +179,7 @@ end
 
 function NS:SaveEntry(draft, existing, classID, specID, injectNow)
     if type(draft) ~= "table" then return nil, "invalid" end
+    self.Core.Database:NormalizeEUITarget(draft)
     local oldClassID, oldSpecID = nil, nil
     if existing then oldClassID, oldSpecID = self:FindEntryScope(existing) end
     if classID == nil then
@@ -223,11 +219,7 @@ function NS:SaveEntry(draft, existing, classID, specID, injectNow)
     if saved.entryType == "euiVoice" then
         saved.enabled = saved.enabled ~= false and saved.voiceEnabled ~= false
         saved.voiceEnabled = saved.enabled
-        local trigger = tostring(saved.euiTriggerType or "cdReady")
-        local family = tostring(saved.euiTargetFamily or "")
-        if family ~= "cd" and family ~= "buff" and family ~= "custom" then
-            saved.euiTargetFamily = (trigger == "buffGain" or trigger == "buffLoss") and "buff" or "cd"
-        end
+        self.Core.Database:NormalizeEUITarget(saved)
         local readiness = self.Core.EUISoundRegistry:GetNativeReadiness(saved)
         if injectNow == nil then injectNow = EllesmereUIVEDB.settings.autoInjectOnSave ~= false end
         if saved.enabled ~= false and injectNow and ScopeIsCurrent(classID, specID) then
@@ -236,6 +228,7 @@ function NS:SaveEntry(draft, existing, classID, specID, injectNow)
             saved.injectionStatus = status
             if status == "requires_reload" then self:NotifyReloadRequiredOnce() end
             return saved, status, ok or status == "requires_reload" or status == "native_ready" or status == "preseeded"
+                or status == "waiting_for_eui_custom_state"
         elseif saved.enabled ~= false and injectNow then
             if oldInjectionChanged then integration:Refresh() end
             return saved, "waiting_for_spec", true
@@ -283,7 +276,8 @@ function NS:InjectSavedEntry(entry)
     if classID == nil or not ScopeIsCurrent(classID, specID) then return false, "waiting_for_spec" end
     local ok, status = self.Integrations.EllesmereUI:InjectEntry(entry, EllesmereUIVEDB.settings.overwriteEUI == true)
     if status == "requires_reload" then self:NotifyReloadRequiredOnce() end
-    return ok or status == "requires_reload" or status == "native_ready" or status == "preseeded", status
+    return ok or status == "requires_reload" or status == "native_ready" or status == "preseeded"
+        or status == "waiting_for_eui_custom_state", status
 end
 
 local reloadNoticeShown = false

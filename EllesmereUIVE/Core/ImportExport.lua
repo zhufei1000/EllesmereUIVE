@@ -25,6 +25,7 @@ local function ExportEntry(entry, classID, specID)
         spellName = entry.spellName,
         objectType = entry.objectType,
         euiTriggerType = entry.euiTriggerType,
+        euiTargetMode = entry.euiTargetMode,
         euiTargetFamily = entry.euiTargetFamily,
         soundSource = entry.soundSource,
         soundPath = entry.soundPath,
@@ -148,11 +149,22 @@ local function ImportEntry(source, forcedType)
         if trigger ~= "cdReady" and trigger ~= "buffGain" and trigger ~= "buffLoss" then return nil end
         if source.soundSource == "tts" or source.notifyMode == "tts" then return nil end
         entry.euiTriggerType = trigger
-        local family = tostring(source.euiTargetFamily or "")
-        if family ~= "cd" and family ~= "buff" and family ~= "custom" then
-            family = (trigger == "buffGain" or trigger == "buffLoss") and "buff" or "cd"
+        local sourceMode = tostring(source.euiTargetMode or "")
+        local sourceFamily = tostring(source.euiTargetFamily or "")
+        if sourceMode == "" then
+            if sourceFamily == "custom" then
+                entry.euiTargetMode, entry.euiTargetFamily = "forced", "custom"
+            else
+                entry.euiTargetMode, entry.euiTargetFamily = "auto", "auto"
+            end
+        elseif sourceMode == "forced" and (sourceFamily == "cd" or sourceFamily == "buff" or sourceFamily == "custom") then
+            entry.euiTargetMode, entry.euiTargetFamily = "forced", sourceFamily
+        elseif sourceMode == "auto" and sourceFamily == "auto" then
+            entry.euiTargetMode, entry.euiTargetFamily = "auto", "auto"
+        else
+            entry.euiTargetMode, entry.euiTargetFamily = "auto", "auto"
         end
-        entry.euiTargetFamily = family
+        NS.Core.Database:NormalizeEUITarget(entry)
     else
         entry.triggerSpellID = tonumber(source.triggerSpellID) or spellID
         entry.delayEnabled = source.delayEnabled == true

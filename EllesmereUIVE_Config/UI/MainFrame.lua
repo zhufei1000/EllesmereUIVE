@@ -269,8 +269,14 @@ function MainFrame:BuildEUIPanel(parent)
         local entry = ReadCommon(panel, {})
         entry.entryType = "euiVoice"
         entry.euiTriggerType = panel.trigger.value
-        entry.euiTargetFamily = panel.editingEntry and panel.editingEntry.euiTargetFamily
-            or ((entry.euiTriggerType == "buffGain" or entry.euiTriggerType == "buffLoss") and "buff" or "cd")
+        local existing = panel.editingEntry
+        if existing and existing.euiTargetMode == "forced" then
+            entry.euiTargetMode = "forced"
+            entry.euiTargetFamily = existing.euiTargetFamily
+        else
+            entry.euiTargetMode = "auto"
+            entry.euiTargetFamily = "auto"
+        end
         return entry, math.max(0, tonumber(panel.classID:GetText()) or 0), math.max(0, tonumber(panel.specID:GetText()) or 0)
     end
 
@@ -281,7 +287,8 @@ function MainFrame:BuildEUIPanel(parent)
         local saved, status, ok = NS:SaveEntry(entry, panel.editingEntry, classID, specID, injectNow)
         if not saved then SetStatus(panel, status == "duplicate" and NS.L("DUPLICATE_ENTRY") or NS.L("SAVE_FAILED")); return end
         panel.editingEntry = saved
-        SetStatus(panel, NS.L("STATUS_" .. tostring(status)), ok and status ~= "requires_reload")
+        SetStatus(panel, NS.L("STATUS_" .. tostring(status)), ok and status ~= "requires_reload"
+            and status ~= "waiting_for_eui_custom_state")
         MainFrame:Refresh()
     end
 
@@ -312,7 +319,8 @@ function MainFrame:BuildEUIPanel(parent)
             root:CreateButton(NS.L("EDIT"), function() edit(entry) end)
             root:CreateButton(NS.L("INJECT_NOW"), function()
                 local ok, status = NS:InjectSavedEntry(entry)
-                SetStatus(panel, NS.L("STATUS_" .. tostring(status)), ok and status ~= "requires_reload"); MainFrame:Refresh()
+                SetStatus(panel, NS.L("STATUS_" .. tostring(status)), ok and status ~= "requires_reload"
+                    and status ~= "waiting_for_eui_custom_state"); MainFrame:Refresh()
             end)
             root:CreateButton(NS.L("REMOVE_INJECTION"), function()
                 local ok, status = NS.Integrations.EllesmereUI:RemoveEntry(entry)

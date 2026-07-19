@@ -14,6 +14,32 @@ local function DeepCopy(value, seen)
     return result
 end
 
+function Database:NormalizeEUITarget(entry)
+    if type(entry) ~= "table" or entry.entryType ~= "euiVoice" then return end
+    local trigger = tostring(entry.euiTriggerType or "cdReady")
+    local family = tostring(entry.euiTargetFamily or "")
+    local mode = tostring(entry.euiTargetMode or "")
+    if mode == "forced" then
+        if family ~= "cd" and family ~= "buff" and family ~= "custom" then
+            entry.euiTargetMode = "auto"
+            entry.euiTargetFamily = "auto"
+        end
+        entry.euiTriggerType = trigger
+        return
+    end
+    -- In 1.0.1 only imported/internal data could deliberately select custom.
+    if family == "custom" then
+        entry.euiTargetMode = "forced"
+        entry.euiTargetFamily = "custom"
+        entry.euiTriggerType = trigger
+        return
+    end
+    -- 1.0.1 UI-authored cd/buff values were defaults, not user overrides.
+    entry.euiTargetMode = "auto"
+    entry.euiTargetFamily = "auto"
+    entry.euiTriggerType = trigger
+end
+
 function Database:NextEntryUID()
     EllesmereUIVEDB.entrySerial = math.max(0, tonumber(EllesmereUIVEDB.entrySerial) or 0) + 1
     return string.format("%08d", EllesmereUIVEDB.entrySerial)
@@ -32,13 +58,7 @@ local function CleanTransientEntryFields(entry)
     entry.objectType = tostring(entry.objectType or "spell")
     entry.enabled = entry.enabled ~= false and entry.voiceEnabled ~= false
     entry.voiceEnabled = entry.enabled
-    if entry.entryType == "euiVoice" then
-        local trigger = tostring(entry.euiTriggerType or "cdReady")
-        local family = tostring(entry.euiTargetFamily or "")
-        if family ~= "cd" and family ~= "buff" and family ~= "custom" then
-            entry.euiTargetFamily = (trigger == "buffGain" or trigger == "buffLoss") and "buff" or "cd"
-        end
-    end
+    Database:NormalizeEUITarget(entry)
 end
 
 function Database:Initialize()

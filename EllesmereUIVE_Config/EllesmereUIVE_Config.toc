@@ -4,7 +4,7 @@
 ## Title-zhTW: EllesmereUIVE 設定
 ## Notes: Load-on-demand configuration UI for EllesmereUIVE.
 ## Author: zhufei1000
-## Version: 1.0.1
+## Version: 1.0.2
 ## Dependencies: EllesmereUIVE
 ## LoadOnDemand: 1
 ## IconTexture: Interface\AddOns\EllesmereUIVE\AppIcon.png
