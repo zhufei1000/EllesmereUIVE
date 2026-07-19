@@ -269,6 +269,8 @@ function MainFrame:BuildEUIPanel(parent)
         local entry = ReadCommon(panel, {})
         entry.entryType = "euiVoice"
         entry.euiTriggerType = panel.trigger.value
+        entry.euiTargetFamily = panel.editingEntry and panel.editingEntry.euiTargetFamily
+            or ((entry.euiTriggerType == "buffGain" or entry.euiTriggerType == "buffLoss") and "buff" or "cd")
         return entry, math.max(0, tonumber(panel.classID:GetText()) or 0), math.max(0, tonumber(panel.specID:GetText()) or 0)
     end
 

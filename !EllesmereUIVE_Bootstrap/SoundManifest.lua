@@ -533,4 +533,3 @@ NS.SoundManifest = {
         path = "Interface\\AddOns\\EllesmereUIVE\\Media\\Sounds\\yeehaw.ogg",
     },
 }
-
