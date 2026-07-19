@@ -1,10 +1,10 @@
-## Interface: 120005, 120007
+## Interface: 120005, 120007, 120100
 ## Title: EllesmereUIVE Config
 ## Title-zhCN: EllesmereUIVE 配置
 ## Title-zhTW: EllesmereUIVE 設定
 ## Notes: Load-on-demand configuration UI for EllesmereUIVE.
 ## Author: zhufei1000
-## Version: 1.0.0
+## Version: 1.0.1
 ## Dependencies: EllesmereUIVE
 ## LoadOnDemand: 1
 ## IconTexture: Interface\AddOns\EllesmereUIVE\AppIcon.png
