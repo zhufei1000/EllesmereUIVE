@@ -300,6 +300,20 @@ local function ResolveTarget(context, family, spellID, create)
     return store[key], family, key
 end
 
+local function ResolveCurrentRecordTarget(context, record, spellID)
+    if type(record) ~= "table" then return nil end
+    if record.family == "customActiveStates" then
+        local states = type(context.cdmProfile) == "table" and context.cdmProfile.customActiveStates or nil
+        if type(states) ~= "table" then return nil end
+        local key = record.customStateKey
+        return type(states[key]) == "table" and states[key]
+            or (type(states[spellID]) == "table" and states[spellID])
+            or (type(states[tostring(spellID)]) == "table" and states[tostring(spellID)]) or nil
+    end
+    local store = type(context.specProfile) == "table" and context.specProfile[record.family] or nil
+    return type(store) == "table" and (store[spellID] or store[tostring(spellID)]) or nil
+end
+
 local function PreseedEntry(entry, classID, specID)
     if InCombatLockdown and InCombatLockdown() then return false, "waiting_combat" end
     if type(entry) ~= "table" or entry.entryType ~= "euiVoice" then return false, "unsupported_entry_type" end
@@ -327,8 +341,18 @@ local function PreseedEntry(entry, classID, specID)
         if not IsEmpty(current) and not owned and not (EllesmereUIVEDB.settings and EllesmereUIVEDB.settings.overwriteEUI == true) then
             return false, false, "conflict"
         end
-        local previousValue = type(record) == "table" and record.previousValue or current
-        if type(record) == "table" and current ~= record.injectedValue and not IsOwned(current) then previousValue = current end
+        local sameRecordedTarget = type(record) == "table" and record.family == family and record.field == field
+            and (family ~= "customActiveStates" or record.customStateKey == nil or record.customStateKey == actualKey)
+        local staleChanged = false
+        if type(record) == "table" and not sameRecordedTarget then
+            local oldTarget = ResolveCurrentRecordTarget(context, record, spellID)
+            if type(oldTarget) == "table" and oldTarget[record.field] == record.injectedValue then
+                oldTarget[record.field] = record.previousValue
+                staleChanged = true
+            end
+        end
+        local previousValue = sameRecordedTarget and record.previousValue or current
+        if sameRecordedTarget and current ~= record.injectedValue and not IsOwned(current) then previousValue = current end
         local fieldChanged = current ~= injectedValue
         if fieldChanged then target[field] = injectedValue end
         local registeredBeforeEUI = API.IsSoundRegisteredBeforeEUI(soundKey)
@@ -346,7 +370,7 @@ local function PreseedEntry(entry, classID, specID)
             soundKey = injectedValue,
             previousValue = previousValue,
             injectedValue = injectedValue,
-            injectedAtVersion = "1.0.1",
+            injectedAtVersion = "1.0.2",
             family = family,
             field = field,
             customStateKey = family == "customActiveStates" and actualKey or nil,
@@ -358,7 +382,7 @@ local function PreseedEntry(entry, classID, specID)
         entry.requiresReload = not nativeReady
         local finalStatus = not nativeReady and "requires_reload"
             or (family == "customActiveStates" and "custom_state_injected" or (beforeCDM and "preseeded" or "native_ready"))
-        return true, fieldChanged, finalStatus
+        return true, staleChanged or fieldChanged, finalStatus
     end)
     if not callOK then return false, "unsupported_structure" end
     return succeeded == true, status, changed == true

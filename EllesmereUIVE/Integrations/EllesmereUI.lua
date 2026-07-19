@@ -277,11 +277,37 @@ local function BuildPlan(self, context, entry, overwrite)
     }, status
 end
 
+local function ResolveCurrentRecordTarget(context, record, spellID)
+    if type(record) ~= "table" then return nil end
+    if record.family == "customActiveStates" then
+        local states = type(context.cdmProfile) == "table" and context.cdmProfile.customActiveStates or nil
+        if type(states) ~= "table" then return nil end
+        local key = record.customStateKey
+        return type(states[key]) == "table" and states[key]
+            or (type(states[spellID]) == "table" and states[spellID])
+            or (type(states[tostring(spellID)]) == "table" and states[tostring(spellID)]) or nil
+    end
+    local store = type(context.specProfile) == "table" and context.specProfile[record.family] or nil
+    return type(store) == "table" and (store[spellID] or store[tostring(spellID)]) or nil
+end
+
 local function ApplyPlan(context, plan)
     local target, actualKey, targetStatus = ResolveTarget(context, plan.family, plan.spellID, true)
     if type(target) ~= "table" then return false, targetStatus or "unsupported_structure" end
-    local previousValue = type(plan.record) == "table" and plan.record.previousValue or plan.current
-    if type(plan.record) == "table" and plan.current ~= plan.record.injectedValue and not IsOwnedValue(plan.current) then
+    local sameRecordedTarget = type(plan.record) == "table" and plan.record.family == plan.family
+        and plan.record.field == plan.field
+        and (plan.family ~= "customActiveStates" or plan.record.customStateKey == nil
+            or plan.record.customStateKey == actualKey)
+    local staleChanged = false
+    if type(plan.record) == "table" and not sameRecordedTarget then
+        local oldTarget = ResolveCurrentRecordTarget(context, plan.record, plan.spellID)
+        if type(oldTarget) == "table" and oldTarget[plan.record.field] == plan.record.injectedValue then
+            oldTarget[plan.record.field] = plan.record.previousValue
+            staleChanged = true
+        end
+    end
+    local previousValue = sameRecordedTarget and plan.record.previousValue or plan.current
+    if sameRecordedTarget and plan.current ~= plan.record.injectedValue and not IsOwnedValue(plan.current) then
         previousValue = plan.current
     end
     if plan.fieldChanged then target[plan.field] = plan.injectedValue end
@@ -296,7 +322,7 @@ local function ApplyPlan(context, plan)
         soundKey = plan.injectedValue,
         previousValue = previousValue,
         injectedValue = plan.injectedValue,
-        injectedAtVersion = NS.VERSION or "1.0.1",
+        injectedAtVersion = NS.VERSION or "1.0.2",
         family = plan.family,
         field = plan.field,
         customStateKey = plan.family == "customActiveStates" and (actualKey or plan.actualKey) or nil,
@@ -304,7 +330,7 @@ local function ApplyPlan(context, plan)
         requiresReload = plan.requiresReload,
     }
     plan.entry.requiresReload = plan.requiresReload
-    return plan.fieldChanged == true or plan.mediaChanged == true, nil
+    return staleChanged or plan.fieldChanged == true or plan.mediaChanged == true, nil
 end
 
 local function NewStats()

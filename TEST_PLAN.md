@@ -1,4 +1,4 @@
-# EllesmereUIVE 1.0.1 Test Plan
+# EllesmereUIVE 1.0.2 Test Plan
 
 Use a clean copy of `!EllesmereUIVE_Bootstrap`, `EllesmereUIVE`, and `EllesmereUIVE_Config`. Keep the installed `EllesmereUI` and `EllesmereUICooldownManager` folders unchanged. Enable Lua error display before testing.
 
@@ -98,4 +98,54 @@ Expected: trigger logic and saved data formats are unchanged, and no `euiVoice` 
 - Bootstrap has no EUI dependency; the main addon depends on Bootstrap; Config remains load-on-demand.
 - No persistent synchronization `OnUpdate`, repeating ticker below one second, `debug.getupvalue`, or EUI source-file modification exists.
 - Every `SoundManifest.lua` path resolves to a real `.ogg` or `.mp3` file.
-- `EllesmereUIVE-1.0.1.zip` contains exactly the three addon folders at archive root.
+- `EllesmereUIVE-1.0.2.zip` contains exactly the three addon folders at archive root.
+
+## 1.0.2 automatic target-selection matrix
+
+### A. Normal EUI custom cooldown skill
+
+With `customActiveStates[12345] = { duration = 30 }`, create a normal UI `cdReady` entry for spell 12345. Confirm `euiTargetMode/euiTargetFamily` are `auto/auto`, `customActiveStates[12345].cdReadySoundKey` is written, and `spellSettingsCD[12345]` is not created.
+
+### B. String custom-state key
+
+Repeat with `customActiveStates["12345"] = {}`. Confirm the string key is retained, no numeric key is created, and removal restores the previous sound.
+
+### C. Unmanaged spell without custom state
+
+Use a spell absent from `barSpells` and `customActiveStates`. Confirm `spellSettingsCD[spellID].cdReadySoundKey` is pre-created and no custom state is created.
+
+### D. Custom state and CD bar both present
+
+Put the same spell in a CD bar and `customActiveStates`. An automatic `cdReady` entry must choose the existing custom state.
+
+### E. Forced CD
+
+Import `euiTargetMode = forced`, `euiTargetFamily = cd` for a spell with an existing custom state. Confirm the voice is written to `spellSettingsCD`.
+
+### F. Forced custom before EUI creates it
+
+Import `forced/custom` for a missing state. Confirm status is `waiting_for_eui_custom_state`, the preset remains saved, no custom state or CD fallback is created, and a later EUI `_ECME_Apply` injects automatically after EUI creates the state.
+
+### G. Buff triggers with an existing custom state
+
+Create automatic `buffGain` and `buffLoss` entries for a spell that has a custom state. Confirm both use `spellSettingsBuff`, never `customActiveStates`.
+
+### H. 1.0.1 normal-data migration
+
+Load an old entry with `euiTargetFamily = cd` (or `buff`) and no target mode. Confirm it becomes `auto/auto` and resolves against the current EUI structure. If a previous injection record points to another family, confirm the old field is restored safely before the record moves to the newly resolved target.
+
+### I. Legacy custom-data migration
+
+Load an old entry with `euiTargetFamily = custom` and no target mode. Confirm it becomes `forced/custom`.
+
+### J. Editing preserves intent
+
+Edit automatic and forced-custom entries, change sound paths, then change spell IDs. Confirm automatic entries remain automatic, forced custom remains forced, and the new spell ID is resolved against its own EUI state.
+
+### K. Custom-state rollback
+
+After injecting into a custom state, delete the entry. Restore `previousValue` only while the field still equals the injected value; preserve a later user edit and never delete the custom-state table.
+
+### L. Regression pass
+
+Repeat Hosted Buff, arbitrary Buff-bar, reload-required media, early Bootstrap, profile/spec synchronization, cast-success, delay, TTS, Bloodlust, and schema-2 import/export tests.
