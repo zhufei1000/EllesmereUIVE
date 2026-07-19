@@ -32,6 +32,13 @@ local function CleanTransientEntryFields(entry)
     entry.objectType = tostring(entry.objectType or "spell")
     entry.enabled = entry.enabled ~= false and entry.voiceEnabled ~= false
     entry.voiceEnabled = entry.enabled
+    if entry.entryType == "euiVoice" then
+        local trigger = tostring(entry.euiTriggerType or "cdReady")
+        local family = tostring(entry.euiTargetFamily or "")
+        if family ~= "cd" and family ~= "buff" and family ~= "custom" then
+            entry.euiTargetFamily = (trigger == "buffGain" or trigger == "buffLoss") and "buff" or "cd"
+        end
+    end
 end
 
 function Database:Initialize()

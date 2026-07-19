@@ -5,11 +5,14 @@ _G.EllesmereUIVENS = NS
 _G.EllesmereUIVE = NS
 _G.EUIVE = NS
 
-NS.VERSION = "1.0.0"
+NS.VERSION = "1.0.1"
 NS.ADDON_NAME = "EllesmereUIVE"
 NS.ADDON_CHAT_PREFIX = "|cff25d5a4[EUIVE]|r"
 NS.CONFIG_ADDON_NAME = "EllesmereUIVE_Config"
 NS.pendingEUIRemovals = NS.pendingEUIRemovals or {}
+NS.internalApplyInProgress = false
+NS.lastProfileKey = NS.lastProfileKey or nil
+NS.lastSpecKey = NS.lastSpecKey or nil
 
 function NS:Print(message)
     local text = self.ADDON_CHAT_PREFIX .. " " .. tostring(message or "")
@@ -140,6 +143,13 @@ function NS:AddEntry(classID, specID, entry)
     entry.entryUID = entry.entryUID or self.Core.Database:NextEntryUID()
     entry.entryUID = tostring(entry.entryUID)
     entry.classID, entry.specID = tonumber(classID) or 0, tonumber(specID) or 0
+    if entry.entryType == "euiVoice" then
+        local trigger = tostring(entry.euiTriggerType or "cdReady")
+        local family = tostring(entry.euiTargetFamily or "")
+        if family ~= "cd" and family ~= "buff" and family ~= "custom" then
+            entry.euiTargetFamily = (trigger == "buffGain" or trigger == "buffLoss") and "buff" or "cd"
+        end
+    end
     entry.injected, entry.injectionStatus = nil, nil
     local list = self:GetScopeList(classID, specID, true)
     list[#list + 1] = entry
@@ -153,6 +163,7 @@ local function SnapshotEntry(entry)
         spellId = entry.spellId,
         objectType = entry.objectType,
         euiTriggerType = entry.euiTriggerType,
+        euiTargetFamily = entry.euiTargetFamily,
         soundSource = entry.soundSource,
         soundPath = entry.soundPath,
         builtinSoundPath = entry.builtinSoundPath,
@@ -212,15 +223,24 @@ function NS:SaveEntry(draft, existing, classID, specID, injectNow)
     if saved.entryType == "euiVoice" then
         saved.enabled = saved.enabled ~= false and saved.voiceEnabled ~= false
         saved.voiceEnabled = saved.enabled
-        self.Core.EUISoundRegistry:RegisterEntry(saved)
+        local trigger = tostring(saved.euiTriggerType or "cdReady")
+        local family = tostring(saved.euiTargetFamily or "")
+        if family ~= "cd" and family ~= "buff" and family ~= "custom" then
+            saved.euiTargetFamily = (trigger == "buffGain" or trigger == "buffLoss") and "buff" or "cd"
+        end
+        local readiness = self.Core.EUISoundRegistry:GetNativeReadiness(saved)
         if injectNow == nil then injectNow = EllesmereUIVEDB.settings.autoInjectOnSave ~= false end
         if saved.enabled ~= false and injectNow and ScopeIsCurrent(classID, specID) then
             local ok, status, injectionChanged = integration:InjectEntry(saved, EllesmereUIVEDB.settings.overwriteEUI == true)
             if oldInjectionChanged and injectionChanged ~= true and status ~= "waiting_combat" then integration:Refresh() end
-            return saved, status, ok or status == "waiting_for_eui_spell" or status == "up_to_date"
+            saved.injectionStatus = status
+            if status == "requires_reload" then self:NotifyReloadRequiredOnce() end
+            return saved, status, ok or status == "requires_reload" or status == "native_ready" or status == "preseeded"
         elseif saved.enabled ~= false and injectNow then
             if oldInjectionChanged then integration:Refresh() end
             return saved, "waiting_for_spec", true
+        elseif readiness == "requires_reload" then
+            saved.injectionStatus = "requires_reload"
         end
     else
         self:RebuildVoiceRuntime()
@@ -261,20 +281,50 @@ function NS:InjectSavedEntry(entry)
     if entry.enabled == false or entry.voiceEnabled == false then return false, "disabled" end
     local classID, specID = self:FindEntryScope(entry)
     if classID == nil or not ScopeIsCurrent(classID, specID) then return false, "waiting_for_spec" end
-    self.Core.EUISoundRegistry:RegisterEntry(entry)
     local ok, status = self.Integrations.EllesmereUI:InjectEntry(entry, EllesmereUIVEDB.settings.overwriteEUI == true)
-    return ok or status == "waiting_for_eui_spell" or status == "up_to_date", status
+    if status == "requires_reload" then self:NotifyReloadRequiredOnce() end
+    return ok or status == "requires_reload" or status == "native_ready" or status == "preseeded", status
+end
+
+local reloadNoticeShown = false
+function NS:NotifyReloadRequiredOnce()
+    if reloadNoticeShown then return false end
+    reloadNoticeShown = true
+    self:Print(self.L("RELOAD_REQUIRED_NOTICE"))
+    return true
 end
 
 function NS:SyncEUIEntries()
+    local integration = self.Integrations.EllesmereUI
+    local profileKey = integration:GetCurrentProfileKey()
+    local specKey = integration:GetCurrentSpecKey()
+    local scopeChanged = tostring(profileKey or "") ~= tostring(self.lastProfileKey or "")
+        or tostring(specKey or "") ~= tostring(self.lastSpecKey or "")
     self.Core.EUISoundRegistry:RegisterAllSavedEntries()
+    if scopeChanged then
+        self.lastProfileKey, self.lastSpecKey = profileKey, specKey
+        local bridge = self.Core and self.Core.BootstrapBridge
+        if bridge and not bridge:IsCDMLoaded() then bridge:PreseedCurrentScope() end
+        self:RebuildVoiceRuntime()
+    end
     local entries = {}
     for _, entry in ipairs(self:GetCurrentEntries("euiVoice")) do
         if entry.enabled ~= false and entry.voiceEnabled ~= false then entries[#entries + 1] = entry end
     end
-    local results, status, stats = self.Integrations.EllesmereUI:SyncCurrentSpec(entries, EllesmereUIVEDB.settings.overwriteEUI == true)
+    local results, status, stats = integration:SyncCurrentSpec(entries, EllesmereUIVEDB.settings.overwriteEUI == true)
     self.lastEUISyncResults, self.lastEUISyncStatus, self.lastEUISyncStats = results, status, stats
     return results, status, stats
+end
+
+local euiApplyHookInstalled = false
+function NS:InstallEUIApplyHook()
+    if euiApplyHookInstalled or type(hooksecurefunc) ~= "function" or type(rawget(_G, "_ECME_Apply")) ~= "function" then return false end
+    euiApplyHookInstalled = true
+    hooksecurefunc("_ECME_Apply", function()
+        if NS.internalApplyInProgress then return end
+        NS:RequestEUISync("EUI_APPLY_HOOK")
+    end)
+    return true
 end
 
 local syncTimerPending = false
@@ -325,7 +375,7 @@ function NS:ScheduleLoginSync()
     loginSyncPending = true
     local function run(attempt)
         self:RequestEUISync("LOGIN", function(_, status)
-            if attempt == 1 and (status == "eui_missing" or status == "module_not_loaded" or status == "unsupported_structure") then
+            if attempt == 1 and (status == "waiting_for_eui" or status == "eui_missing" or status == "module_not_loaded" or status == "unsupported_structure") then
                 if C_Timer and C_Timer.After then C_Timer.After(0.5, function() run(2) end) else run(2) end
             else
                 loginSyncPending, loginSyncCompleted = false, true
@@ -365,6 +415,7 @@ local function InitializeAddon()
     NS.Core.Database:Initialize()
     NS.Core.EUISoundRegistry:RegisterAllSavedEntries()
     NS:RebuildVoiceRuntime()
+    NS:InstallEUIApplyHook()
     InitializeSlashCommands()
 end
 
@@ -381,11 +432,14 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
         elseif addonName == "EllesmereUI" or addonName == "EllesmereUICooldownManager" then
             if initialized then
                 NS.Core.EUISoundRegistry:RegisterAllSavedEntries()
+                NS:InstallEUIApplyHook()
+                NS:RequestEUISync("ADDON_LOADED_" .. addonName)
             end
         end
     elseif event == "PLAYER_LOGIN" then
         InitializeAddon()
         NS.Core.EUISoundRegistry:RegisterAllSavedEntries()
+        NS:InstallEUIApplyHook()
         NS.Core.MinimapButton:Initialize()
         NS.Core.ConfigPanel:Initialize()
         if EllesmereUIVEDB.settings.showLoadMessage ~= false then NS:Print(NS.L("LOADED")) end
@@ -394,6 +448,7 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
         NS.Core.CastSuccess:Reset()
     elseif event == "PLAYER_ENTERING_WORLD" then
         NS.Core.EUISoundRegistry:RegisterAllSavedEntries()
+        NS:InstallEUIApplyHook()
         NS:ScheduleLoginSync()
     elseif event == "PLAYER_SPECIALIZATION_CHANGED" then
         local unit = ...

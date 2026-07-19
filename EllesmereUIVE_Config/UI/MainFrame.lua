@@ -223,7 +223,7 @@ end
 local function SyncSummary(stats)
     stats = type(stats) == "table" and stats or {}
     return NS.L("SYNC_SUMMARY", stats.injected or 0, stats.upToDate or 0, stats.waiting or 0,
-        stats.conflict or 0, stats.invalidSound or 0, stats.unsupported or 0)
+        stats.reloadRequired or 0, stats.conflict or 0, stats.invalidSound or 0, stats.unsupported or 0)
 end
 
 function MainFrame:BuildEUIPanel(parent)
@@ -269,6 +269,8 @@ function MainFrame:BuildEUIPanel(parent)
         local entry = ReadCommon(panel, {})
         entry.entryType = "euiVoice"
         entry.euiTriggerType = panel.trigger.value
+        entry.euiTargetFamily = panel.editingEntry and panel.editingEntry.euiTargetFamily
+            or ((entry.euiTriggerType == "buffGain" or entry.euiTriggerType == "buffLoss") and "buff" or "cd")
         return entry, math.max(0, tonumber(panel.classID:GetText()) or 0), math.max(0, tonumber(panel.specID:GetText()) or 0)
     end
 
@@ -279,7 +281,7 @@ function MainFrame:BuildEUIPanel(parent)
         local saved, status, ok = NS:SaveEntry(entry, panel.editingEntry, classID, specID, injectNow)
         if not saved then SetStatus(panel, status == "duplicate" and NS.L("DUPLICATE_ENTRY") or NS.L("SAVE_FAILED")); return end
         panel.editingEntry = saved
-        SetStatus(panel, NS.L("STATUS_" .. tostring(status)), ok)
+        SetStatus(panel, NS.L("STATUS_" .. tostring(status)), ok and status ~= "requires_reload")
         MainFrame:Refresh()
     end
 
@@ -298,7 +300,10 @@ function MainFrame:BuildEUIPanel(parent)
         FillCommon(panel, entry)
         MainFrame.exportEntry = entry
         panel.trigger:SetValue(entry and entry.euiTriggerType or "cdReady")
-        if entry then local text, status = StatusText(entry); SetStatus(panel, text, status == "injected" or status == "up_to_date") else SetStatus(panel, "") end
+        if entry then
+            local text, status = StatusText(entry)
+            SetStatus(panel, text, status == "native_ready" or status == "preseeded" or status == "custom_state_injected" or status == "up_to_date")
+        else SetStatus(panel, "") end
     end
 
     local function context(entry, owner)
@@ -307,7 +312,7 @@ function MainFrame:BuildEUIPanel(parent)
             root:CreateButton(NS.L("EDIT"), function() edit(entry) end)
             root:CreateButton(NS.L("INJECT_NOW"), function()
                 local ok, status = NS:InjectSavedEntry(entry)
-                SetStatus(panel, NS.L("STATUS_" .. tostring(status)), ok); MainFrame:Refresh()
+                SetStatus(panel, NS.L("STATUS_" .. tostring(status)), ok and status ~= "requires_reload"); MainFrame:Refresh()
             end)
             root:CreateButton(NS.L("REMOVE_INJECTION"), function()
                 local ok, status = NS.Integrations.EllesmereUI:RemoveEntry(entry)
@@ -330,7 +335,8 @@ function MainFrame:BuildEUIPanel(parent)
         local pending = 0
         for _, entry in ipairs(NS:GetCurrentEntries("euiVoice")) do
             local entryStatus = integration:GetEntryStatus(entry)
-            if entryStatus ~= "injected" and entryStatus ~= "up_to_date" and entryStatus ~= "disabled" then pending = pending + 1 end
+            if entryStatus ~= "native_ready" and entryStatus ~= "preseeded" and entryStatus ~= "custom_state_injected"
+                and entryStatus ~= "up_to_date" and entryStatus ~= "disabled" then pending = pending + 1 end
         end
         self.connection:SetText(NS.L("EUI_STATUS_LINE", available and NS.L("CONNECTED") or NS.L("STATUS_" .. tostring(status))))
         self.character:SetText(NS.L("CHARACTER_LINE", className, specName))
@@ -437,8 +443,12 @@ function MainFrame:BuildImportPanel(parent)
         ShowExport(NS.Core.ImportExport:BuildCollectionPayload(classID, specID))
     end)
     Button(panel, "Import", 397, -505, 100, function()
-        local ok, err = NS.Core.ImportExport:ImportText(edit:GetText())
-        SetStatus(panel, ok and NS.L("IMPORT_DONE") or NS.L("IMPORT_FAILED", err or "unknown"), ok)
+        local ok, added, status = NS.Core.ImportExport:ImportText(edit:GetText())
+        local message
+        if not ok then message = NS.L("IMPORT_FAILED", added or "unknown")
+        elseif status == "requires_reload" then message = NS.L("IMPORT_DONE_RELOAD", added or 0)
+        else message = NS.L("IMPORT_DONE_COUNT", added or 0) end
+        SetStatus(panel, message, ok and status ~= "requires_reload")
         MainFrame:Refresh()
     end)
     return panel
