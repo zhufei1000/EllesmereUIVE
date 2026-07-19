@@ -125,6 +125,7 @@ local FIELD_BY_TRIGGER = {
     buffGain = "buffActiveSoundKey",
     buffLoss = "buffLostSoundKey",
 }
+local HOSTED_BUFF_MARKER_BASE = 2000000000
 
 local function GetCurrentClassSpec()
     local classID = 0
@@ -150,11 +151,16 @@ local function ScopeIsCurrent(classID, specID)
     return (classID == 0 or classID == currentClassID) and (specID == 0 or specID == currentSpecID)
 end
 
-local function InferFamily(entry)
-    local explicit = tostring(entry and entry.euiTargetFamily or "")
-    if explicit == "cd" or explicit == "buff" or explicit == "custom" then return explicit end
-    local trigger = tostring(entry and entry.euiTriggerType or "cdReady")
-    return (trigger == "buffGain" or trigger == "buffLoss") and "buff" or "cd"
+local function NormalizeTargetMode(entry)
+    if type(entry) ~= "table" or entry.entryType ~= "euiVoice" then return end
+    local family = tostring(entry.euiTargetFamily or "")
+    if tostring(entry.euiTargetMode or "") == "forced"
+        and (family == "cd" or family == "buff" or family == "custom") then return end
+    if family == "custom" then
+        entry.euiTargetMode, entry.euiTargetFamily = "forced", "custom"
+    else
+        entry.euiTargetMode, entry.euiTargetFamily = "auto", "auto"
+    end
 end
 
 local function EnsureEUIContext()
@@ -172,23 +178,87 @@ local function EnsureEUIContext()
     profile.specProfiles[specKey] = type(profile.specProfiles[specKey]) == "table" and profile.specProfiles[specKey] or { barSpells = {} }
     local specProfile = profile.specProfiles[specKey]
     specProfile.barSpells = type(specProfile.barSpells) == "table" and specProfile.barSpells or {}
+    local savedProfile = type(root.profiles) == "table" and root.profiles[profileKey] or nil
+    local cdmProfile = type(savedProfile) == "table" and type(savedProfile.addons) == "table"
+        and savedProfile.addons.EllesmereUICooldownManager or nil
     return {
         root = root,
         profileKey = profileKey,
         specKey = specKey,
         specProfile = specProfile,
+        cdmProfile = cdmProfile,
     }
 end
 
-local function EnsureCDMProfile(context)
-    local root = context.root
-    root.profiles = type(root.profiles) == "table" and root.profiles or {}
-    root.profiles[context.profileKey] = type(root.profiles[context.profileKey]) == "table" and root.profiles[context.profileKey] or {}
-    local profile = root.profiles[context.profileKey]
-    profile.addons = type(profile.addons) == "table" and profile.addons or {}
-    profile.addons.EllesmereUICooldownManager = type(profile.addons.EllesmereUICooldownManager) == "table"
-        and profile.addons.EllesmereUICooldownManager or {}
-    return profile.addons.EllesmereUICooldownManager
+local function DecodeManagedID(value)
+    value = tonumber(value)
+    if not value then return nil end
+    if value <= -HOSTED_BUFF_MARKER_BASE then return -value - HOSTED_BUFF_MARKER_BASE end
+    return value > 0 and value or nil
+end
+
+local function IsBuffBar(barData)
+    if type(barData) ~= "table" then return false end
+    return barData.barType == "buffs" or barData.barType == "buff" or barData.type == "buffs"
+end
+
+local function DiscoverFamilies(specProfile, spellID)
+    local foundCD, foundBuff = false, false
+    for _, barData in pairs(type(specProfile) == "table" and type(specProfile.barSpells) == "table" and specProfile.barSpells or {}) do
+        for _, rawID in ipairs(type(barData) == "table" and type(barData.assignedSpells) == "table" and barData.assignedSpells or {}) do
+            if DecodeManagedID(rawID) == spellID then
+                if tonumber(rawID) and tonumber(rawID) <= -HOSTED_BUFF_MARKER_BASE then
+                    foundBuff = true
+                elseif IsBuffBar(barData) then
+                    foundBuff = true
+                else
+                    foundCD = true
+                end
+            end
+        end
+    end
+    return foundCD, foundBuff
+end
+
+local function FindCustomState(context, spellID)
+    local states = type(context.cdmProfile) == "table" and context.cdmProfile.customActiveStates or nil
+    if type(states) ~= "table" then return nil, nil end
+    if type(states[spellID]) == "table" then return states[spellID], spellID end
+    local stringKey = tostring(spellID)
+    if type(states[stringKey]) == "table" then return states[stringKey], stringKey end
+    return nil, nil
+end
+
+local function IsForcedTarget(entry)
+    if tostring(entry and entry.euiTargetMode or "") ~= "forced" then return false end
+    local family = tostring(entry and entry.euiTargetFamily or "")
+    return family == "cd" or family == "buff" or family == "custom"
+end
+
+-- Keep this target-family resolution algorithm synchronized with:
+-- EllesmereUIVE/Integrations/EllesmereUI.lua
+local function ResolveTargetFamily(context, entry, spellID)
+    local trigger = tostring(entry.euiTriggerType or "cdReady")
+    local family = tostring(entry.euiTargetFamily or "auto")
+    local forced = IsForcedTarget(entry)
+    if trigger == "buffGain" or trigger == "buffLoss" then
+        if forced then
+            if family == "custom" then return nil, "unsupported_entry_type" end
+            if family == "cd" then return "spellSettingsCD" end
+            if family == "buff" then return "spellSettingsBuff" end
+        end
+        return "spellSettingsBuff"
+    end
+    if forced then
+        if family == "custom" then return "customActiveStates" end
+        if family == "buff" then return "spellSettingsBuff" end
+        if family == "cd" then return "spellSettingsCD" end
+    end
+    if FindCustomState(context, spellID) then return "customActiveStates" end
+    local foundCD, foundBuff = DiscoverFamilies(context.specProfile, spellID)
+    if foundCD then return "spellSettingsCD" end
+    if foundBuff then return "spellSettingsBuff" end
+    return "spellSettingsCD"
 end
 
 local function GetRecordTable(profileKey, specKey, spellID, create)
@@ -216,24 +286,18 @@ local function IsOwned(value)
     return type(value) == "string" and value:find("^sm:EUIVE_") ~= nil
 end
 
-local function ResolveTarget(context, entry, spellID, create)
-    local family = InferFamily(entry)
-    if family == "custom" then
-        if tostring(entry.euiTriggerType or "cdReady") ~= "cdReady" then return nil, "unsupported_entry_type" end
-        local cdm = EnsureCDMProfile(context)
-        cdm.customActiveStates = type(cdm.customActiveStates) == "table" and cdm.customActiveStates or {}
-        local states = cdm.customActiveStates
-        local key = states[spellID] and spellID or (states[tostring(spellID)] and tostring(spellID) or nil)
-        if not key and create then key = spellID; states[key] = {} end
-        return key and states[key] or nil, "customActiveStates", key
+local function ResolveTarget(context, family, spellID, create)
+    if family == "customActiveStates" then
+        local target, key = FindCustomState(context, spellID)
+        if not target then return nil, nil, nil, "waiting_for_eui_custom_state" end
+        return target, "customActiveStates", key
     end
-    local storeName = family == "buff" and "spellSettingsBuff" or "spellSettingsCD"
-    local store = context.specProfile[storeName]
-    if type(store) ~= "table" and create then store = {}; context.specProfile[storeName] = store end
-    if type(store) ~= "table" then return nil, storeName end
+    local store = context.specProfile[family]
+    if type(store) ~= "table" and create then store = {}; context.specProfile[family] = store end
+    if type(store) ~= "table" then return nil, family end
     local key = store[spellID] and spellID or (store[tostring(spellID)] and tostring(spellID) or spellID)
     if type(store[key]) ~= "table" and create then store[key] = {} end
-    return store[key], storeName, key
+    return store[key], family, key
 end
 
 local function PreseedEntry(entry, classID, specID)
@@ -245,21 +309,23 @@ local function PreseedEntry(entry, classID, specID)
     local trigger = tostring(entry.euiTriggerType or "cdReady")
     local field = FIELD_BY_TRIGGER[trigger]
     if not spellID or spellID <= 0 or not field then return false, "unsupported_entry_type" end
-    entry.euiTargetFamily = InferFamily(entry)
+    NormalizeTargetMode(entry)
     local soundKey, registerStatus = RegisterSavedEntry(entry)
     if not soundKey then return false, registerStatus end
     local injectedValue = "sm:" .. soundKey
-    local ok, changed, status = pcall(function()
+    local callOK, succeeded, changed, status = pcall(function()
         local context, contextStatus = EnsureEUIContext()
-        if not context then return false, contextStatus end
-        local target, family, actualKey = ResolveTarget(context, entry, spellID, true)
-        if type(target) ~= "table" then return false, family or "unsupported_structure" end
+        if not context then return false, false, contextStatus end
+        local resolvedFamily, familyStatus = ResolveTargetFamily(context, entry, spellID)
+        if not resolvedFamily then return false, false, familyStatus end
+        local target, family, actualKey, targetStatus = ResolveTarget(context, resolvedFamily, spellID, true)
+        if type(target) ~= "table" then return false, false, targetStatus or family or "unsupported_structure" end
         local records = GetRecordTable(context.profileKey, context.specKey, spellID, true)
         local record = records[trigger]
         local current = rawget(target, field)
         local owned = IsOwned(current) or (type(record) == "table" and current == record.injectedValue)
         if not IsEmpty(current) and not owned and not (EllesmereUIVEDB.settings and EllesmereUIVEDB.settings.overwriteEUI == true) then
-            return false, "conflict"
+            return false, false, "conflict"
         end
         local previousValue = type(record) == "table" and record.previousValue or current
         if type(record) == "table" and current ~= record.injectedValue and not IsOwned(current) then previousValue = current end
@@ -267,7 +333,7 @@ local function PreseedEntry(entry, classID, specID)
         if fieldChanged then target[field] = injectedValue end
         local registeredBeforeEUI = API.IsSoundRegisteredBeforeEUI(soundKey)
         local beforeCDM = not AddOnLoaded("EllesmereUICooldownManager")
-        local triggerFamily = (trigger == "buffGain" or trigger == "buffLoss") and "buff" or "cd"
+        local triggerFamily = family == "spellSettingsBuff" and "buff" or "cd"
         local nativeReady = beforeCDM or entry.preseededBeforeCDM == true
             or (registeredBeforeEUI and NS.Runtime.armedFamilies[triggerFamily] == true)
         records[trigger] = {
@@ -292,10 +358,10 @@ local function PreseedEntry(entry, classID, specID)
         entry.requiresReload = not nativeReady
         local finalStatus = not nativeReady and "requires_reload"
             or (family == "customActiveStates" and "custom_state_injected" or (beforeCDM and "preseeded" or "native_ready"))
-        return fieldChanged, finalStatus
+        return true, fieldChanged, finalStatus
     end)
-    if not ok then return false, "unsupported_structure" end
-    return true, status, changed == true
+    if not callOK then return false, "unsupported_structure" end
+    return succeeded == true, status, changed == true
 end
 
 local function PreseedCurrentScope()
@@ -325,8 +391,8 @@ local function ScanArmedFamilies()
         if type(settings) == "table" and ((settings.buffActiveSoundKey and settings.buffActiveSoundKey ~= "none")
             or (settings.buffLostSoundKey and settings.buffLostSoundKey ~= "none")) then buff = true; break end
     end
-    local cdm = EnsureCDMProfile(context)
-    for _, settings in pairs(type(cdm.customActiveStates) == "table" and cdm.customActiveStates or {}) do
+    local cdm = context.cdmProfile
+    for _, settings in pairs(type(cdm) == "table" and type(cdm.customActiveStates) == "table" and cdm.customActiveStates or {}) do
         if type(settings) == "table" and settings.cdReadySoundKey and settings.cdReadySoundKey ~= "none" then cd = true; break end
     end
     NS.Runtime.armedFamilies.cd = cd
