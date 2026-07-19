@@ -282,6 +282,7 @@ local function PreseedEntry(entry, classID, specID)
             requiresReload = false,
         }
         entry.registeredBeforeEUI = API.IsSoundRegisteredBeforeEUI(soundKey)
+        entry.preseededBeforeCDM = not AddOnLoaded("EllesmereUICooldownManager")
         entry.requiresReload = false
         return fieldChanged, family == "customActiveStates" and "custom_state_injected" or "preseeded"
     end)
