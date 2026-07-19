@@ -1,0 +1,8 @@
+## Interface: 120005, 120007
+## Title: LibSharedMedia-3.0
+## Notes: Shared handling of media data between addons.
+## Author: Elkano
+## Version: v12.0.0-r167
+## OptionalDeps: LibStub, CallbackHandler-1.0
+
+lib.xml

@@ -1,0 +1,36 @@
+## Interface: 120005, 120007
+## Title: EllesmereUIVE
+## Title-zhCN: EllesmereUIVE
+## Title-zhTW: EllesmereUIVE
+## Notes: Lightweight voice editor for EllesmereUI Cooldown Manager, with cast-success and Bloodlust voice alerts.
+## Notes-zhCN: EllesmereUI 冷却管理器语音编辑器，支持施法成功和嗜血语音提醒。
+## Notes-zhTW: EllesmereUI 冷卻管理器語音編輯器，支援施法成功和嗜血語音提醒。
+## Author: zhufei1000
+## Version: 1.0.0
+## X-Compatible-GameVersion: 12.0.5, 12.0.7
+## SavedVariables: EllesmereUIVEDB
+## OptionalDeps: EllesmereUI, EllesmereUICooldownManager, LibSharedMedia-3.0, SharedMedia, SharedMedia_Causese, SharedMedia_MyMedia, SharedMedia_Naowh, NaowhUI
+## IconTexture: Interface\AddOns\EllesmereUIVE\AppIcon.png
+
+Ace3\LibStub\LibStub.lua
+Ace3\CallbackHandler-1.0\CallbackHandler-1.0.xml
+Libs\LibSharedMedia-3.0\lib.xml
+Libs\LibDataBroker-1.1\LibDataBroker-1.1.lua
+Libs\LibDBIcon-1.0\LibDBIcon-1.0.lua
+Ace3\AceSerializer-3.0\AceSerializer-3.0.xml
+Libs\LibDeflate\LibDeflate.lua
+
+Localization.lua
+Core\Constants.lua
+Core\Database.lua
+Core\VoicePlayer.lua
+Core\EUISoundRegistry.lua
+Core\CastSuccessScheduler.lua
+Core\CastSuccessSchedulerBridge.lua
+Core\CastSuccess.lua
+Core\Bloodlust.lua
+Integrations\EllesmereUI.lua
+Core\ImportExport.lua
+Core\ConfigPanel.lua
+Core\MinimapButton.lua
+EllesmereUIVE.lua
