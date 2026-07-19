@@ -10,6 +10,9 @@ NS.ADDON_NAME = "EllesmereUIVE"
 NS.ADDON_CHAT_PREFIX = "|cff25d5a4[EUIVE]|r"
 NS.CONFIG_ADDON_NAME = "EllesmereUIVE_Config"
 NS.pendingEUIRemovals = NS.pendingEUIRemovals or {}
+NS.internalApplyInProgress = false
+NS.lastProfileKey = NS.lastProfileKey or nil
+NS.lastSpecKey = NS.lastSpecKey or nil
 
 function NS:Print(message)
     local text = self.ADDON_CHAT_PREFIX .. " " .. tostring(message or "")
@@ -153,6 +156,7 @@ local function SnapshotEntry(entry)
         spellId = entry.spellId,
         objectType = entry.objectType,
         euiTriggerType = entry.euiTriggerType,
+        euiTargetFamily = entry.euiTargetFamily,
         soundSource = entry.soundSource,
         soundPath = entry.soundPath,
         builtinSoundPath = entry.builtinSoundPath,
@@ -267,14 +271,36 @@ function NS:InjectSavedEntry(entry)
 end
 
 function NS:SyncEUIEntries()
+    local integration = self.Integrations.EllesmereUI
+    local profileKey = integration:GetCurrentProfileKey()
+    local specKey = integration:GetCurrentSpecKey()
+    local scopeChanged = tostring(profileKey or "") ~= tostring(self.lastProfileKey or "")
+        or tostring(specKey or "") ~= tostring(self.lastSpecKey or "")
     self.Core.EUISoundRegistry:RegisterAllSavedEntries()
+    if scopeChanged then
+        self.lastProfileKey, self.lastSpecKey = profileKey, specKey
+        local bridge = self.Core and self.Core.BootstrapBridge
+        if bridge and not bridge:IsCDMLoaded() then bridge:PreseedCurrentScope() end
+        self:RebuildVoiceRuntime()
+    end
     local entries = {}
     for _, entry in ipairs(self:GetCurrentEntries("euiVoice")) do
         if entry.enabled ~= false and entry.voiceEnabled ~= false then entries[#entries + 1] = entry end
     end
-    local results, status, stats = self.Integrations.EllesmereUI:SyncCurrentSpec(entries, EllesmereUIVEDB.settings.overwriteEUI == true)
+    local results, status, stats = integration:SyncCurrentSpec(entries, EllesmereUIVEDB.settings.overwriteEUI == true)
     self.lastEUISyncResults, self.lastEUISyncStatus, self.lastEUISyncStats = results, status, stats
     return results, status, stats
+end
+
+local euiApplyHookInstalled = false
+function NS:InstallEUIApplyHook()
+    if euiApplyHookInstalled or type(hooksecurefunc) ~= "function" or type(rawget(_G, "_ECME_Apply")) ~= "function" then return false end
+    euiApplyHookInstalled = true
+    hooksecurefunc("_ECME_Apply", function()
+        if NS.internalApplyInProgress then return end
+        NS:RequestEUISync("EUI_APPLY_HOOK")
+    end)
+    return true
 end
 
 local syncTimerPending = false
@@ -325,7 +351,7 @@ function NS:ScheduleLoginSync()
     loginSyncPending = true
     local function run(attempt)
         self:RequestEUISync("LOGIN", function(_, status)
-            if attempt == 1 and (status == "eui_missing" or status == "module_not_loaded" or status == "unsupported_structure") then
+            if attempt == 1 and (status == "waiting_for_eui" or status == "eui_missing" or status == "module_not_loaded" or status == "unsupported_structure") then
                 if C_Timer and C_Timer.After then C_Timer.After(0.5, function() run(2) end) else run(2) end
             else
                 loginSyncPending, loginSyncCompleted = false, true
@@ -365,6 +391,7 @@ local function InitializeAddon()
     NS.Core.Database:Initialize()
     NS.Core.EUISoundRegistry:RegisterAllSavedEntries()
     NS:RebuildVoiceRuntime()
+    NS:InstallEUIApplyHook()
     InitializeSlashCommands()
 end
 
@@ -381,11 +408,14 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
         elseif addonName == "EllesmereUI" or addonName == "EllesmereUICooldownManager" then
             if initialized then
                 NS.Core.EUISoundRegistry:RegisterAllSavedEntries()
+                NS:InstallEUIApplyHook()
+                NS:RequestEUISync("ADDON_LOADED_" .. addonName)
             end
         end
     elseif event == "PLAYER_LOGIN" then
         InitializeAddon()
         NS.Core.EUISoundRegistry:RegisterAllSavedEntries()
+        NS:InstallEUIApplyHook()
         NS.Core.MinimapButton:Initialize()
         NS.Core.ConfigPanel:Initialize()
         if EllesmereUIVEDB.settings.showLoadMessage ~= false then NS:Print(NS.L("LOADED")) end
@@ -394,6 +424,7 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
         NS.Core.CastSuccess:Reset()
     elseif event == "PLAYER_ENTERING_WORLD" then
         NS.Core.EUISoundRegistry:RegisterAllSavedEntries()
+        NS:InstallEUIApplyHook()
         NS:ScheduleLoginSync()
     elseif event == "PLAYER_SPECIALIZATION_CHANGED" then
         local unit = ...
