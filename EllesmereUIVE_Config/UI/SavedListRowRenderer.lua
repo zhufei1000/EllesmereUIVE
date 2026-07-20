@@ -94,10 +94,10 @@ function RowRenderer:UpdateRow(row, entry, opts)
         row.statusDot:SetPoint("LEFT", row, "LEFT", indent, 0)
         row.statusDot:Show()
         local euiStatus = tostring(entry.euiStatus or "")
-        if euiStatus == "conflict" or euiStatus == "invalid_path" or euiStatus == "sharedmedia_missing" or euiStatus == "unsupported_tts" then
+        if euiStatus == "conflict" or euiStatus == "invalid_path" or euiStatus == "invalid_item_id" or euiStatus == "sharedmedia_missing" or euiStatus == "unsupported_tts" then
             row.statusDot:SetTextColor(1.00, 0.18, 0.18, 1)
         elseif euiStatus == "saved_waiting_sync" or euiStatus == "waiting_for_skill" or euiStatus == "waiting_for_eui"
-            or euiStatus == "waiting_for_eui_custom_state" or euiStatus == "waiting_for_spec" or euiStatus == "requires_reload" then
+            or euiStatus == "waiting_for_eui_custom_state" or euiStatus == "waiting_for_item_target" or euiStatus == "waiting_for_spec" or euiStatus == "requires_reload" then
             row.statusDot:SetTextColor(1.00, 0.82, 0.00, 1)
         elseif entry.isLoaded == false then
             row.statusDot:SetTextColor(1.00, 0.18, 0.18, 1)

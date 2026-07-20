@@ -1188,8 +1188,9 @@ function EntryStore:SaveEntry(owner)
         savedEntry.enabled = voiceEnabled
     end
 
-    -- 已经保存过 triggerSpellID 的同一物品，不再重复解析；只沿用旧值。
-    if objectType == OBJECT_TYPE_ITEM
+    -- 施法成功监听需要物品的使用法术；EUI 冷却监听只按 itemID 建档。
+    if entryType == "cast"
+        and objectType == OBJECT_TYPE_ITEM
         and oldEntry
         and tostring(oldEntry.objectType or "") == OBJECT_TYPE_ITEM
         and (tonumber(oldEntry.spellId) or 0) == spellId
@@ -1198,7 +1199,7 @@ function EntryStore:SaveEntry(owner)
         savedEntry.triggerSpellName = tostring(oldEntry.triggerSpellName or "")
     end
 
-    if objectType == OBJECT_TYPE_ITEM and type(api.ResolveItemTriggerForEntry) == "function" then
+    if entryType == "cast" and objectType == OBJECT_TYPE_ITEM and type(api.ResolveItemTriggerForEntry) == "function" then
         local resolved = api.ResolveItemTriggerForEntry(savedEntry, true)
         if not resolved then
             print("[EUIVE] " .. L("MSG_ITEM_TRIGGER_PENDING_SAVED", tostring(spellId)))
