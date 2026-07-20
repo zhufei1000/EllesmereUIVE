@@ -487,7 +487,7 @@ local function PreseedEntry(entry, classID, specID, targetSpecID)
             soundKey = injectedValue,
             previousValue = previousValue,
             injectedValue = injectedValue,
-            injectedAtVersion = "1.0.4",
+            injectedAtVersion = "1.0.5",
             family = family,
             field = field,
             customStateKey = family == "customActiveStates" and actualKey or nil,

@@ -6,7 +6,7 @@
 ## Notes-zhCN: EllesmereUI 冷却管理器语音编辑器，支持施法成功和嗜血语音提醒。
 ## Notes-zhTW: EllesmereUI 冷卻管理器語音編輯器，支援施法成功和嗜血語音提醒。
 ## Author: zhufei1000
-## Version: 1.0.4
+## Version: 1.0.5
 ## X-Compatible-GameVersion: 12.0.5, 12.0.7, 12.1.0
 ## Dependencies: !EllesmereUIVE_Bootstrap
 ## OptionalDeps: LibSharedMedia-3.0, SharedMedia, SharedMedia_Causese, SharedMedia_MyMedia, SharedMedia_Naowh, NaowhUI

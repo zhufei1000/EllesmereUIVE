@@ -5,7 +5,7 @@ _G.EllesmereUIVENS = NS
 _G.EllesmereUIVE = NS
 _G.EUIVE = NS
 
-NS.VERSION = "1.0.4"
+NS.VERSION = "1.0.5"
 NS.ADDON_NAME = "EllesmereUIVE"
 NS.ADDON_CHAT_PREFIX = "|cff25d5a4[EUIVE]|r"
 NS.CONFIG_ADDON_NAME = "EllesmereUIVE_Config"
