@@ -49,7 +49,20 @@ function MainFrame:RefreshActionButtons()
     end
 end
 
-function MainFrame:RequestRefresh(reason)
+function MainFrame:RequestRefresh(reason, delay)
+    if tostring(reason or "") == "list" and delay ~= nil and self.savedList then
+        local savedListRefresh = NS.UI and NS.UI.SavedListRefresh
+        local ace = NS.AceOptions
+        local state = ace and type(ace.GetState) == "function" and ace:GetState() or nil
+        if state and type(self.savedList.SetSelectedKey) == "function" then
+            self.savedList:SetSelectedKey(state.selectedKey)
+        end
+        if savedListRefresh and type(savedListRefresh.InvalidateAndRefresh) == "function" then
+            local refreshed = savedListRefresh:InvalidateAndRefresh(self.savedList)
+            self:RefreshActionButtons()
+            return refreshed
+        end
+    end
     if MainFrameRefresh and type(MainFrameRefresh.RequestRefresh) == "function" then
         return MainFrameRefresh:RequestRefresh(self, reason)
     end

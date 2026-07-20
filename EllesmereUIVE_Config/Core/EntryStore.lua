@@ -421,7 +421,7 @@ end
 local function RequestNativeUIRefresh(reason)
     if NS.UI and NS.UI.MainFrame then
         if type(NS.UI.MainFrame.RequestRefresh) == "function" then
-            NS.UI.MainFrame:RequestRefresh(reason or "list")
+            NS.UI.MainFrame:RequestRefresh(reason or "list", 0)
             return true
         elseif type(NS.UI.MainFrame.Refresh) == "function" then
             NS.UI.MainFrame:Refresh()
@@ -429,6 +429,36 @@ local function RequestNativeUIRefresh(reason)
         end
     end
     return false
+end
+
+local function IsSaveDebugEnabled()
+    if NS.DEBUG_SAVE == true then
+        return true
+    end
+    local db = rawget(_G, "EllesmereUIVEDB")
+    local settings = type(db) == "table" and db.settings or nil
+    return type(settings) == "table" and (settings.developerMode == true or settings.debugSave == true)
+end
+
+local function SaveStage(stage, details)
+    if not IsSaveDebugEnabled() then
+        return
+    end
+    local suffix = tostring(details or "")
+    if suffix ~= "" then suffix = " " .. suffix end
+    print("[EUIVE DEBUG] " .. tostring(stage or "SAVE") .. suffix)
+end
+
+local function SafeCall(label, func, ...)
+    if type(func) ~= "function" then
+        return false, "missing"
+    end
+    local ok, a, b, c = pcall(func, ...)
+    if not ok then
+        print("[EUIVE] 保存后处理失败：" .. tostring(label or "unknown") .. "：" .. tostring(a))
+        return false, tostring(a)
+    end
+    return true, a, b, c
 end
 
 local function HideRuntimeVisualAlerts(preserveActiveKey)
@@ -973,8 +1003,9 @@ function EntryStore:SaveEntry(owner)
     local options = GetOptions(owner)
     local state = type(options.GetState) == "function" and options:GetState() or {}
     if not api then
-        return false, "invalid_scope"
+        return false, "invalid_scope", { committed = false }
     end
+    SaveStage("SAVE_BEGIN")
 
     local classID = tonumber(state.classID) or 0
     local specID = tonumber(state.specID) or 0
@@ -1094,11 +1125,11 @@ function EntryStore:SaveEntry(owner)
     state.alertSpecIDs = alertSpecIDs
     if classID < 0 or specID < 0 then
         print("[EUIVE] " .. L("MSG_INVALID_CLASS_SPEC"))
-        return false, "invalid_scope"
+        return false, "invalid_scope", { committed = false }
     end
     if spellId <= 0 then
         print("[EUIVE] " .. L("MSG_INVALID_SPELL_ID"))
-        return false, "invalid_scope"
+        return false, "invalid_scope", { committed = false }
     end
     if isCooldownEntry then
         baseCD = 0
@@ -1111,7 +1142,7 @@ function EntryStore:SaveEntry(owner)
         voiceEnabled = true
         if soundSource == "tts" or notifyMode == modeTts then
             print("[EUIVE] " .. L("STATUS_unsupported_tts"))
-            return false, "invalid_sound"
+            return false, "invalid_sound", { committed = false }
         end
     end
     if (not isCooldownEntry) then
@@ -1127,15 +1158,15 @@ function EntryStore:SaveEntry(owner)
     end
     if isCastEntry and delayEnabled and delaySeconds <= 0 then
         print("[EUIVE] " .. L("MSG_INVALID_DELAY_SECONDS"))
-        return false, "invalid_scope"
+        return false, "invalid_scope", { committed = false }
     end
     if checkTalent and talentId <= 0 then
         print("[EUIVE] " .. L("MSG_NEED_TALENT_ID"))
-        return false, "invalid_scope"
+        return false, "invalid_scope", { committed = false }
     end
     if checkTalent and talentCD <= 0 then
         print("[EUIVE] " .. L("MSG_NEED_TALENT_CD"))
-        return false, "invalid_scope"
+        return false, "invalid_scope", { committed = false }
     end
     if checkTalent and talentName == "" and type(api.ResolveTalentName) == "function" then
         talentName = api.ResolveTalentName(talentId)
@@ -1143,17 +1174,17 @@ function EntryStore:SaveEntry(owner)
     end
     if not voiceEnabled and not imageEnabled and not textEnabled then
         print("[EUIVE] " .. L("MSG_NEED_ALERT_ACTIONS"))
-        return false, "invalid_scope"
+        return false, "invalid_scope", { committed = false }
     end
     if voiceEnabled and notifyMode == modeTts and TrimText(ttsText) == "" then
         print("[EUIVE] " .. L("MSG_NEED_TTS_TEXT"))
-        return false, "invalid_sound"
+        return false, "invalid_sound", { committed = false }
     end
     if voiceEnabled and notifyMode == modeSound
         and ((soundSource == "sharedmedia" and sharedMediaSound == "")
             or (soundSource ~= "sharedmedia" and TrimText(soundPath) == "")) then
         print("[EUIVE] " .. L("MSG_NEED_SOUND_PATH"))
-        return false, "invalid_sound"
+        return false, "invalid_sound", { committed = false }
     end
 
     local selectedKeyIsEntry = tostring(state.selectedKey or ""):match("^%-?%d+:%-?%d+:%-?%d+$") ~= nil
@@ -1188,13 +1219,13 @@ function EntryStore:SaveEntry(owner)
             and (objectType ~= OBJECT_TYPE_ITEM or ItemLoadModesOverlap(entry.itemLoadMode, itemLoadMode))
             and EntryAlertScopeOverlaps(entry, classID, specID, alertRaceIDs, alertClassIDs, alertSpecIDs) then
             print("[EUIVE] " .. L("MSG_DUP_SPELL"))
-            return false, "duplicate"
+            return false, "duplicate", { committed = false }
         end
     end
 
     if targetIndex <= 0 then
         print("[EUIVE] " .. L("MSG_SAVE_LIMIT"))
-        return false, "move_failed"
+        return false, "move_failed", { committed = false }
     end
 
     local oldEntry = original and original.entry or api.GetEntry(map, targetIndex)
@@ -1291,46 +1322,43 @@ function EntryStore:SaveEntry(owner)
         end
     end
 
-    savedEntry.entryUID = oldEntry and oldEntry.entryUID or (NS.Core and NS.Core.Database and NS.Core.Database:NextEntryUID())
-    savedEntry.entryUID = tostring(savedEntry.entryUID or "")
     savedEntry.classID, savedEntry.specID = classID, specID
     if NS.Core and NS.Core.Database and type(NS.Core.Database.NormalizeEUITarget) == "function" then
         NS.Core.Database:NormalizeEUITarget(savedEntry)
     end
     if isCooldownEntry then
         local registry = NS.Core and NS.Core.EUISoundRegistry
-        local soundValue, soundStatus = registry and registry:RegisterEntry(savedEntry)
-        if not soundValue then
+        local soundValid, soundStatus = true, "valid"
+        if registry and type(registry.ValidateEntry) == "function" then
+            soundValid, soundStatus = registry:ValidateEntry(savedEntry)
+        end
+        if not soundValid then
             print("[EUIVE] " .. L("STATUS_" .. tostring(soundStatus or "invalid_path")))
-            return false, "invalid_sound"
+            return false, "invalid_sound", { committed = false }
         end
     end
+    SaveStage("SAVE_VALIDATED")
+    local db = EnsureRootDB()
+    local serialBackup = db.entrySerial
+    savedEntry.entryUID = oldEntry and oldEntry.entryUID or (NS.Core and NS.Core.Database and NS.Core.Database:NextEntryUID())
+    savedEntry.entryUID = tostring(savedEntry.entryUID or "")
     local integration = NS.Integrations and NS.Integrations.EllesmereUI
     local definitionChanged = oldEntry and oldEntry.entryType == "euiVoice" and integration
         and type(NS.EUIDefinitionChanged) == "function"
         and NS.EUIDefinitionChanged(oldEntry, savedEntry, selectedClassID, selectedSpecID, classID, specID)
-    local oldInjectionChanged = false
-    if definitionChanged then
-        local oldSnapshot = type(NS.SnapshotEntry) == "function" and NS.SnapshotEntry(oldEntry) or oldEntry
-        local removed, removeStatus, removalChanged = integration:RemoveEntryFromAllRecordedScopes(oldSnapshot, true)
-        oldInjectionChanged = removalChanged == true
-        if not removed and removeStatus ~= "removed" then
-            print("[EUIVE] " .. L("STATUS_" .. tostring(removeStatus or "move_failed")))
-            return false, "move_failed"
-        end
-    end
+    local oldSnapshot = definitionChanged and (type(NS.SnapshotEntry) == "function" and NS.SnapshotEntry(oldEntry) or oldEntry) or nil
 
     local oldKey = original and BuildEntryKey(original.classID, original.specID, original.index) or nil
     local newKey = BuildEntryKey(classID, specID, targetIndex)
     local scopeChanged = original and (original.classID ~= classID or original.specID ~= specID or original.index ~= targetIndex)
-    local db = EnsureRootDB()
     local deepCopy = NS.Core and NS.Core.Database and NS.Core.Database.DeepCopy
     local collectionBackup = deepCopy and deepCopy(db.collectionData) or nil
     local orderBackup = deepCopy and deepCopy(db.savedListOrder) or nil
     local targetMap = api.EnsureEntryMap(classID, specID)
     local previousTarget = api.GetEntry(targetMap, targetIndex)
     local movedOutOfCollection = false
-    local commitOK = pcall(function()
+    local committed = false
+    local commitOK, commitError = pcall(function()
         ClearDeletedEntryMarker(classID, specID, savedEntry, targetIndex)
         targetMap[targetIndex] = savedEntry
         if scopeChanged and oldKey then
@@ -1354,58 +1382,107 @@ function EntryStore:SaveEntry(owner)
             end
         end
         NormalizeAllCollectionScopes(api)
+        committed = true
     end)
-    if not commitOK then
+    if not commitOK or not committed then
         targetMap[targetIndex] = previousTarget
         if original then original.map[original.index] = oldEntry end
         if collectionBackup then db.collectionData = collectionBackup end
         if orderBackup then db.savedListOrder = orderBackup end
-        if definitionChanged and type(NS.InjectSavedEntry) == "function" then NS:InjectSavedEntry(oldEntry) end
+        db.entrySerial = serialBackup
         print("[EUIVE] " .. L("MSG_SAVE_MOVE_FAILED"))
-        return false, "move_failed"
+        return false, "move_failed", { committed = false, error = tostring(commitError or "commit_incomplete") }
     end
 
+    state.selectedKey = newKey
+    state.editingEntryUID = savedEntry.entryUID
+    local details = {
+        committed = true,
+        injected = false,
+        saveStatus = "saved",
+        entryUID = savedEntry.entryUID,
+        classID = classID,
+        specID = specID,
+        index = targetIndex,
+    }
+    state.lastSaveDetails = details
+    SaveStage("SAVE_COMMITTED", "uid=" .. tostring(savedEntry.entryUID) .. " key=" .. newKey)
+
     local saveResult = "saved"
+    local oldInjectionChanged = false
+    if definitionChanged and integration and type(integration.RemoveEntryFromAllRecordedScopes) == "function" then
+        local removeOK, removed, removeStatus, removalChanged = SafeCall(
+            "remove_old_injection",
+            integration.RemoveEntryFromAllRecordedScopes,
+            integration,
+            oldSnapshot,
+            true
+        )
+        oldInjectionChanged = removeOK and removalChanged == true
+        if not removeOK or (removed ~= true and removeStatus ~= "removed") then
+            details.postprocessError = tostring(removeOK and removeStatus or removed or "remove_failed")
+        end
+    end
     if isCooldownEntry then
         local registry = NS.Core and NS.Core.EUISoundRegistry
-        if registry and type(registry.RegisterEntry) == "function" then registry:RegisterEntry(savedEntry) end
+        if registry and type(registry.RegisterEntry) == "function" then
+            local registerOK, soundValue, soundStatus = SafeCall("sound_register", registry.RegisterEntry, registry, savedEntry)
+            details.soundRegistered = registerOK and soundValue ~= nil
+            details.soundStatus = soundStatus
+            if not details.soundRegistered then details.postprocessError = tostring(soundStatus or soundValue or "sound_register_failed") end
+            SaveStage("SAVE_SOUND_REGISTERED", "status=" .. tostring(soundStatus or soundValue or "missing"))
+        end
         if state.injectOnSave == true and type(NS.InjectSavedEntry) == "function" then
-            local _, status, stats = NS:InjectSavedEntry(savedEntry)
-            if type(stats) == "table" and ((tonumber(stats.injected) or 0) + (tonumber(stats.upToDate) or 0)) > 0
+            SaveStage("SAVE_INJECT_STARTED")
+            local injectOK, injectCallResult, status, stats = SafeCall("inject_saved_entry", NS.InjectSavedEntry, NS, savedEntry)
+            details.injectStatus = injectOK and status or tostring(injectCallResult or "inject_failed")
+            details.injectStats = type(stats) == "table" and stats or nil
+            if injectOK and injectCallResult == true and type(stats) == "table" and ((tonumber(stats.injected) or 0) + (tonumber(stats.upToDate) or 0)) > 0
                 and (tonumber(stats.waiting) or 0) == 0 and (tonumber(stats.conflict) or 0) == 0
                 and (tonumber(stats.invalidSound) or 0) == 0 and (tonumber(stats.reloadRequired) or 0) == 0 then
                 saveResult = "saved_and_injected"
+                details.injected = true
+            elseif injectOK then
+                local currentStatus = integration and type(integration.GetInjectionStatus) == "function"
+                    and select(2, SafeCall("injection_status", integration.GetInjectionStatus, integration, savedEntry)) or status
+                details.injectStatus = currentStatus or status or "pending"
+                local suffix = tostring(details.injectStatus or "pending")
+                if suffix:match("^saved_") then saveResult = suffix else saveResult = "saved_" .. suffix end
+            else
+                saveResult = "saved_inject_failed"
+                details.postprocessError = tostring(injectCallResult or "inject_failed")
             end
             if oldInjectionChanged and not (type(stats) == "table" and stats.refreshRequired == true) then
-                integration:Refresh()
+                SafeCall("integration_refresh", integration and integration.Refresh, integration)
             end
+            SaveStage("SAVE_INJECT_FINISHED", "status=" .. tostring(details.injectStatus or status or saveResult))
         else
-            if oldInjectionChanged then integration:Refresh() end
+            if oldInjectionChanged then SafeCall("integration_refresh", integration and integration.Refresh, integration) end
         end
     elseif oldInjectionChanged then
-        integration:Refresh()
+        SafeCall("integration_refresh", integration and integration.Refresh, integration)
     end
 
-    api.RebuildRuntimeConfig()
-    if type(api.RebuildCastSuccessConfig) == "function" then
-        api.RebuildCastSuccessConfig()
+    if isCastEntry then
+        SafeCall("rebuild_cast_success", api.RebuildCastSuccessConfig)
     end
-    if type(api.RebuildCustomConfig) == "function" then
-        api.RebuildCustomConfig()
+    SafeCall("saved_list_cache", NS.SavedListLayout and NS.SavedListLayout.InvalidateCache, NS.SavedListLayout)
+    local refreshOK, refreshRequested = SafeCall("native_ui_refresh", RequestNativeUIRefresh, "list")
+    if (not refreshOK or refreshRequested ~= true) and type(api.RefreshPanel) == "function" then
+        SafeCall("refresh_panel", api.RefreshPanel)
     end
-    HideRuntimeVisualAlerts(true)
-    api.RefreshRuntimeCooldowns()
-    state.selectedKey = BuildEntryKey(classID, specID, targetIndex)
-    self:LoadSelectedEntry(options)
-    if NS.SavedListLayout and type(NS.SavedListLayout.InvalidateCache) == "function" then NS.SavedListLayout:InvalidateCache() end
-    if not RequestNativeUIRefresh("list") and type(api.RefreshPanel) == "function" then
-        api.RefreshPanel()
-    end
+    SaveStage("SAVE_UI_REFRESHED")
     print("[EUIVE] " .. L("MSG_CONFIG_SAVED"))
     if movedOutOfCollection then print("[EUIVE] " .. L("MSG_SCOPE_CHANGED_COLLECTION_REMOVED")) end
-    local currentStatus = integration and type(integration.GetInjectionStatus) == "function" and integration:GetInjectionStatus(savedEntry) or nil
+    local statusOK, currentStatus = SafeCall("injection_status", integration and integration.GetInjectionStatus, integration, savedEntry)
+    if not statusOK then currentStatus = nil end
     if currentStatus then print("[EUIVE] " .. L("STATUS_" .. tostring(currentStatus))) end
-    return true, saveResult
+    details.saveStatus = saveResult
+    details.refreshStatus = refreshOK and "requested" or "failed"
+    state.lastSaveResult = saveResult
+    state.lastSaveDetails = details
+    SaveStage("SAVE_FINISHED", "status=" .. saveResult)
+    return true, saveResult, details
 end
 
 function EntryStore:DeleteSelectedEntry(owner, suppressRefresh)

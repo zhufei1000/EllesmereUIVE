@@ -498,7 +498,7 @@ local function ApplyPlan(context, plan)
         soundKey = plan.injectedValue,
         previousValue = previousValue,
         injectedValue = plan.injectedValue,
-        injectedAtVersion = NS.VERSION or "1.0.4",
+        injectedAtVersion = NS.VERSION or "1.0.5",
         family = plan.family,
         field = plan.field,
         customStateKey = plan.family == "customActiveStates" and (actualKey or plan.actualKey) or nil,

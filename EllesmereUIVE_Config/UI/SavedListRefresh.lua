@@ -58,12 +58,38 @@ function Refresh:RequestRefresh(list, delay)
         return true
     end
     list._refreshPending = true
+    list._refreshSerial = (tonumber(list._refreshSerial) or 0) + 1
+    local refreshSerial = list._refreshSerial
     CallSoon(function()
+        if list._refreshSerial ~= refreshSerial then return end
         list._refreshPending = false
         if list.frame and list.frame.IsShown and list.frame:IsShown() then
             self:Refresh(list)
         end
     end, delay or 0)
+    return true
+end
+
+function Refresh:InvalidateAndRefresh(list)
+    if NS.SavedListLayout and type(NS.SavedListLayout.InvalidateCache) == "function" then
+        NS.SavedListLayout:InvalidateCache()
+    end
+    if not list then return false end
+
+    list._cachedLoadedEntries = nil
+    list._cachedUnloadedEntries = nil
+    list._cachedLoadedDisplayCount = nil
+    list._cachedUnloadedDisplayCount = nil
+    list._refreshPending = false
+    list._refreshSerial = (tonumber(list._refreshSerial) or 0) + 1
+    local refreshSerial = list._refreshSerial
+
+    CallSoon(function()
+        if list._refreshSerial ~= refreshSerial then return end
+        if list.frame and list.frame.IsShown and list.frame:IsShown() then
+            self:Refresh(list)
+        end
+    end, 0)
     return true
 end
 

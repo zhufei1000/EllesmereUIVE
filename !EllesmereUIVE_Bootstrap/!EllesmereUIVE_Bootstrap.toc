@@ -2,7 +2,7 @@
 ## Title: EllesmereUIVE Bootstrap
 ## Notes: Early media registration and EUI voice preset bootstrap.
 ## Author: zhufei1000
-## Version: 1.0.4
+## Version: 1.0.5
 ## SavedVariables: EllesmereUIVEDB
 ## LoadOnDemand: 0
 ## OptionalDeps: EllesmereUI, EllesmereUICooldownManager, SharedMedia, SharedMedia_Causese, SharedMedia_MyMedia, SharedMedia_Naowh, NaowhUI
