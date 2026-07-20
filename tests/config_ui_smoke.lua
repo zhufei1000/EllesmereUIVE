@@ -141,6 +141,7 @@ NS.Core.EUISoundRegistry = { RegisterEntry = function() return true end, Registe
 NS.Integrations = { EllesmereUI = {
     GetInjectionStatus = function() return "saved_waiting_sync" end,
     RemoveEntry = function() return true, "removed", false end,
+    RemoveEntryFromAllRecordedScopes = function() return true, "removed", false end,
 } }
 
 local toc = assert(io.open("EllesmereUIVE_Config/EllesmereUIVE_Config.toc", "r"))
@@ -156,10 +157,19 @@ assert(loadfile("EllesmereUIVE/Core/ImportExport.lua"))()
 assert(NS.UI.MainFrame:Open())
 NS.UI.EditorFrame:OpenForNew("euiVoice")
 assert(NS.UI.EditorFrame.frame:GetName() == "EllesmereUIVEEditorFrame")
+assert(NS.UI.EditorFrame.frame.widgets.classDrop == nil and NS.UI.EditorFrame.frame.widgets.specDrop == nil)
+assert(NS.UI.EditorFrame.frame.widgets.builtinDrop.qfxsaSearchable == true)
+assert(NS.UI.EditorFrame.frame.widgets.sharedMediaDrop.qfxsaSearchable == true)
+assert(NS.UI.EditorFrame.frame.widgets.soundSourceDrop.qfxsaSearchable == false)
+assert(NS.UI.EditorFrame.frame.widgets.euiTriggerDrop.qfxsaSearchable == false)
 
 local state = NS.AceOptions:GetState()
 state.classID, state.specID = 8, 62
 state.alertClassIDs, state.alertSpecIDs, state.alertRaceIDs = { [8] = true }, { [62] = true }, { [0] = true }
+NS.UI.EditorFrame:PullFromWidgets()
+assert(state.alertClassIDs[8] == true and next(state.alertClassIDs, 8) == nil)
+assert(state.alertSpecIDs[62] == true and next(state.alertSpecIDs, 62) == nil)
+assert(state.alertRaceIDs[0] == true and next(state.alertRaceIDs, 0) == nil)
 assert(NS.AceOptions:CreateCollection("Mixed", nil, nil, true))
 local groupKey = state.selectedCollectionKey
 

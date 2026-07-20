@@ -81,6 +81,32 @@ local function CountConcrete(map)
     return count
 end
 
+local function SingleConcreteID(map)
+    local found
+    for key, value in pairs(map or {}) do
+        local id = tonumber(key) or 0
+        if value == true and id > 0 then
+            if found then return nil end
+            found = id
+        end
+    end
+    return found
+end
+
+local function GetClassName(classID)
+    for _, option in ipairs(NS.AceOptions and NS.AceOptions:GetClassOptionList() or {}) do
+        if tonumber(option.classID) == tonumber(classID) then return tostring(option.className or classID) end
+    end
+    return tostring(classID)
+end
+
+local function GetSpecName(classID, specID)
+    for _, option in ipairs(NS.AceOptions and NS.AceOptions:GetSpecOptionList(classID) or {}) do
+        if tonumber(option.specID) == tonumber(specID) then return tostring(option.specName or specID) end
+    end
+    return tostring(specID)
+end
+
 local function HasConcreteSelection(map)
     for key, value in pairs(map or {}) do
         if value == true and (tonumber(key) or 0) > 0 then
@@ -158,9 +184,10 @@ function ScopeSelector:BuildSummary(state)
     local classMap = NormalizeDefaultCurrentMap(state.alertClassIDs or state.customClassIDs, ALL_CLASSES_ID, currentClassID)
     local specMap = NormalizeDefaultCurrentMap(state.alertSpecIDs or state.customSpecIDs, ALL_SPECS_ID, currentSpecID)
 
-    local raceText = raceMap[ALL_RACES_ID] and L("SCOPE_ALL_RACES") or L("SCOPE_RACE_COUNT", CountConcrete(raceMap))
-    local classText = classMap[ALL_CLASSES_ID] and L("SCOPE_ALL_CLASSES") or L("SCOPE_CLASS_COUNT", CountConcrete(classMap))
-    local specText = specMap[ALL_SPECS_ID] and L("SCOPE_ALL_SPECS") or L("SCOPE_SPEC_COUNT", CountConcrete(specMap))
+    local singleRace, singleClass, singleSpec = SingleConcreteID(raceMap), SingleConcreteID(classMap), SingleConcreteID(specMap)
+    local raceText = raceMap[ALL_RACES_ID] and L("SCOPE_ALL_RACES") or (singleRace and GetRaceName(singleRace) or L("SCOPE_RACE_COUNT", CountConcrete(raceMap)))
+    local classText = classMap[ALL_CLASSES_ID] and L("SCOPE_ALL_CLASSES") or (singleClass and GetClassName(singleClass) or L("SCOPE_CLASS_COUNT", CountConcrete(classMap)))
+    local specText = specMap[ALL_SPECS_ID] and L("SCOPE_ALL_SPECS") or (singleClass and singleSpec and GetSpecName(singleClass, singleSpec) or L("SCOPE_SPEC_COUNT", CountConcrete(specMap)))
     return string.format("%s / %s / %s", raceText, classText, specText)
 end
 
@@ -398,8 +425,12 @@ function ScopeSelector:Open(state, onApply)
         state.customClassIDs = nextClassMap
         state.alertSpecIDs = nextSpecMap
         state.customSpecIDs = nextSpecMap
-        state.classID = ALL_CLASSES_ID
-        state.specID = ALL_SPECS_ID
+        local resolver = NS.Core and NS.Core.ScopeResolver
+        if resolver and type(resolver.ResolveStorageScope) == "function" then
+            state.classID, state.specID = resolver:ResolveStorageScope(nextClassMap, nextSpecMap)
+        else
+            state.classID, state.specID = ALL_CLASSES_ID, ALL_SPECS_ID
+        end
         frame:Hide()
         if type(onApply) == "function" then
             onApply(state)

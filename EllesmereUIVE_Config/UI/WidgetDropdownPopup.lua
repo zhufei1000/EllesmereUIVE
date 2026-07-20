@@ -17,6 +17,31 @@ local DROPDOWN_ROW_HEIGHT = 22
 local DROPDOWN_MAX_VISIBLE_ROWS = 10
 local DROPDOWN_POPUP_PADDING = 6
 local DROPDOWN_AUTO_CLOSE_DELAY = 0.20
+local DROPDOWN_SEARCH_HEIGHT = 30
+
+local function NormalizeSearchText(value)
+    return tostring(value or "")
+        :gsub("|c%x%x%x%x%x%x%x%x", "")
+        :gsub("|r", "")
+        :gsub("|T.-|t", " ")
+        :gsub("|A.-|a", " ")
+        :lower()
+end
+
+local function FilterItems(items, query)
+    local filtered = {}
+    query = NormalizeSearchText(query)
+    for index, item in ipairs(type(items) == "table" and items or {}) do
+        local haystack = NormalizeSearchText(item.searchText or (tostring(item.text or "") .. " " .. tostring(item.value or "")))
+        if query == "" or haystack:find(query, 1, true) then
+            filtered[#filtered + 1] = { item = item, originalIndex = index }
+        end
+    end
+    return filtered
+end
+
+Popup.NormalizeSearchText = NormalizeSearchText
+Popup.FilterItems = FilterItems
 
 local function SelectDropdownValue(dropdown, value, text)
     if not dropdown then
@@ -220,6 +245,7 @@ local function GetScrollableDropdownPopup()
     popup.rows = {}
     popup.offset = 0
     popup.visibleRows = 0
+    local RenderRows, RefreshFilter, SelectItemByIndex
 
     if popup.SetBackdrop then
         popup:SetBackdrop({
@@ -233,6 +259,42 @@ local function GetScrollableDropdownPopup()
         popup:SetBackdropColor(0, 0, 0, 0.98)
         popup:SetBackdropBorderColor(0.75, 0.75, 0.75, 0.98)
     end
+
+    local searchBox = SafeCreateFrame("EditBox", "EllesmereUIVENativeDropDownSearchBox", popup, {
+        "SearchBoxTemplate", "InputBoxTemplate",
+    })
+    searchBox:SetHeight(24)
+    searchBox:SetPoint("TOPLEFT", popup, "TOPLEFT", 8, -7)
+    searchBox:SetPoint("TOPRIGHT", popup, "TOPRIGHT", -8, -7)
+    searchBox:SetAutoFocus(false)
+    searchBox:Hide()
+    searchBox:HookScript("OnTextChanged", function(self)
+        local owner = popup.owner
+        if not owner or not owner.qfxsaSearchable then return end
+        owner.qfxsaSearchText = tostring(self:GetText() or "")
+        if RefreshFilter then RefreshFilter(true) end
+    end)
+    searchBox:SetScript("OnEscapePressed", function(self)
+        if tostring(self:GetText() or "") ~= "" then self:SetText("") else popup:Hide() end
+    end)
+    searchBox:SetScript("OnEnterPressed", function()
+        local filtered = popup.filteredItems or {}
+        local record = filtered[1]
+        if #filtered == 1 and record and SelectItemByIndex then
+            SelectItemByIndex(record.originalIndex)
+        elseif #filtered > 1 and SelectItemByIndex then
+            local highlighted
+            for _, row in ipairs(popup.rows or {}) do
+                if row.qfxsaHover and row.qfxsaHover:IsShown() then highlighted = row.itemIndex break end
+            end
+            SelectItemByIndex(highlighted or filtered[1].originalIndex)
+        end
+    end)
+
+    local noResults = popup:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    noResults:SetPoint("CENTER", popup, "CENTER", 0, -12)
+    noResults:SetText(NS.L and NS.L("NO_MATCHING_SOUNDS") or "No matching sounds")
+    noResults:Hide()
 
     local scrollBar = ScrollBar and ScrollBar.Create and ScrollBar:Create(popup, "EllesmereUIVENativeDropDownPopupScrollBar", {
         orientation = "VERTICAL",
@@ -254,12 +316,12 @@ local function GetScrollableDropdownPopup()
     scrollBar:SetPoint("BOTTOMRIGHT", popup, "BOTTOMRIGHT", -6, 18)
     scrollBar:SetFrameLevel((popup:GetFrameLevel() or 1) + 30)
 
-    local function RenderRows()
+    RenderRows = function()
         local owner = popup.owner
         if not owner then
             return
         end
-        local items = owner.qfxsaItems or {}
+        local items = popup.filteredItems or owner.qfxsaItems or {}
         local offset = math.floor(tonumber(popup.offset) or 0)
         local visibleRows = tonumber(popup.visibleRows) or 0
         local width = tonumber(popup.rowWidth) or 120
@@ -269,9 +331,10 @@ local function GetScrollableDropdownPopup()
             local row = popup.rows[i]
             if row then
                 local itemIndex = offset + i
-                local item = items[itemIndex]
+                local record = items[itemIndex]
+                local item = type(record) == "table" and (record.item or record) or nil
                 if item then
-                    row.itemIndex = itemIndex
+                    row.itemIndex = record.originalIndex or itemIndex
                     row.itemValue = item.value
                     row.dropdown = owner
                     row.label:SetText(tostring(item.text or ""))
@@ -313,9 +376,10 @@ local function GetScrollableDropdownPopup()
         for i = visibleRows + 1, #popup.rows do
             popup.rows[i]:Hide()
         end
+        noResults:SetShown(#items == 0 and owner.qfxsaSearchable == true)
     end
 
-    local function SelectItemByIndex(itemIndex)
+    SelectItemByIndex = function(itemIndex)
         local owner = popup.owner
         if not owner then
             return
@@ -353,7 +417,7 @@ local function GetScrollableDropdownPopup()
         if x < DROPDOWN_POPUP_PADDING or x > rightLimit then
             return nil
         end
-        local rowNumber = math.floor((y - DROPDOWN_POPUP_PADDING) / DROPDOWN_ROW_HEIGHT) + 1
+        local rowNumber = math.floor((y - (self.contentTop or DROPDOWN_POPUP_PADDING)) / DROPDOWN_ROW_HEIGHT) + 1
         if rowNumber < 1 or rowNumber > (self.visibleRows or 0) then
             return nil
         end
@@ -373,7 +437,8 @@ local function GetScrollableDropdownPopup()
         end
         local rowNumber = GetRowNumberAtCursor(popup)
         if rowNumber then
-            SelectItemByIndex((popup.offset or 0) + rowNumber)
+            local row = popup.rows[rowNumber]
+            if row and row.itemIndex then SelectItemByIndex(row.itemIndex) end
         end
     end
 
@@ -411,6 +476,10 @@ local function GetScrollableDropdownPopup()
             self.autoCloseAt = nil
             return
         end
+        if self.searchBox and self.searchBox.HasFocus and self.searchBox:HasFocus() then
+            self.autoCloseAt = nil
+            return
+        end
         if IsCursorInsideFrame(self) or IsCursorInsideFrame(self.owner) then
             self.autoCloseAt = nil
             return
@@ -431,6 +500,51 @@ local function GetScrollableDropdownPopup()
             scrollBar:SetValue(value)
         end
         RenderRows()
+    end
+
+    RefreshFilter = function(fromSearch)
+        local owner = popup.owner
+        if not owner then return end
+        local items = owner.qfxsaItems or {}
+        popup.filteredItems = owner.qfxsaSearchable and FilterItems(items, owner.qfxsaSearchText or "") or nil
+        local view = popup.filteredItems or items
+        local count = #view
+        local visibleRows = math.min(count, DROPDOWN_MAX_VISIBLE_ROWS)
+        local hasScroll = count > visibleRows
+        local width = tonumber(popup.baseWidth) or 180
+        local searchSpace = owner.qfxsaSearchable and DROPDOWN_SEARCH_HEIGHT or 0
+        local displayRows = math.max(1, visibleRows)
+        popup:SetSize(width, (displayRows * DROPDOWN_ROW_HEIGHT) + (DROPDOWN_POPUP_PADDING * 2) + searchSpace)
+        popup.visibleRows = visibleRows
+        popup.maxOffset = math.max(0, count - visibleRows)
+        popup.hasScroll = hasScroll
+        popup.contentTop = DROPDOWN_POPUP_PADDING + searchSpace
+        popup.rowWidth = width - (hasScroll and 34 or 12)
+        if hasScroll then
+            scrollBar:Show()
+            scrollBar:SetMinMaxValues(0, popup.maxOffset)
+            scrollBar:SetValueStep(1)
+        else
+            scrollBar:Hide()
+            scrollBar:SetMinMaxValues(0, 0)
+        end
+        local initialOffset = 0
+        if not fromSearch then
+            local selectedIndex = 1
+            for index, record in ipairs(view) do
+                local item = record.item or record
+                if (owner.qfxsaMultiSelect and owner.qfxsaSelectedValues and owner.qfxsaSelectedValues[item.value] == true)
+                    or (not owner.qfxsaMultiSelect and owner.qfxsaValue == item.value) then selectedIndex = index break end
+            end
+            if hasScroll and selectedIndex > 1 then initialOffset = selectedIndex - math.ceil(visibleRows / 2) end
+        end
+        for i = 1, math.max(visibleRows, 1) do
+            local row = EnsureDropdownRow(popup, i)
+            row:ClearAllPoints()
+            row:SetPoint("TOPLEFT", popup, "TOPLEFT", DROPDOWN_POPUP_PADDING, -popup.contentTop - ((i - 1) * DROPDOWN_ROW_HEIGHT))
+            row:SetSize(math.max(1, popup.rowWidth), DROPDOWN_ROW_HEIGHT)
+        end
+        SetScroll(fromSearch and 0 or Clamp(initialOffset, 0, popup.maxOffset), false)
     end
 
     scrollBar:SetScript("OnValueChanged", function(_, value)
@@ -462,7 +576,13 @@ local function GetScrollableDropdownPopup()
                 ApplyDropdownRowHover(row, false)
             end
         end
+        local closingOwner = self.owner
+        if closingOwner then closingOwner.qfxsaSearchText = "" end
         self.owner = nil
+        self.filteredItems = nil
+        searchBox:ClearFocus()
+        searchBox:SetText("")
+        searchBox:Hide()
         self.offset = 0
         self.hasScroll = nil
         self.skipMouseUpSelection = nil
@@ -474,8 +594,11 @@ local function GetScrollableDropdownPopup()
     end)
 
     popup.scrollBar = scrollBar
+    popup.searchBox = searchBox
+    popup.noResults = noResults
     popup.SetPopupScroll = SetScroll
     popup.RenderRows = RenderRows
+    popup.RefreshFilter = RefreshFilter
     popup.SelectRow = SelectRow
     popup.SelectByCursor = SelectByCursor
     Widgets._nativeDropdownPopup = popup
@@ -501,70 +624,34 @@ function Popup:Show(dropdown)
     end
 
     local items = dropdown.qfxsaItems or {}
-    local count = #items
-    if count <= 0 then
-        return
-    end
+    if #items <= 0 then return end
 
     popup.owner = dropdown
     RaiseDropdownPopup(popup, dropdown)
 
     local width = math.max(120, math.floor(tonumber(dropdown.qfxsaOuterWidth) or ((dropdown.GetWidth and dropdown:GetWidth()) or 180)))
-    local visibleRows = math.min(count, DROPDOWN_MAX_VISIBLE_ROWS)
-    local height = (visibleRows * DROPDOWN_ROW_HEIGHT) + (DROPDOWN_POPUP_PADDING * 2)
-    local hasScroll = count > visibleRows
-    local rowWidth = width - (hasScroll and 34 or 12)
-
-    popup:SetSize(width, height)
-    popup.rowWidth = rowWidth
-    popup.visibleRows = visibleRows
-    popup.maxOffset = math.max(0, count - visibleRows)
-    popup.hasScroll = hasScroll
-
+    popup.baseWidth = width
     popup.scrollBar:SetFrameLevel((popup:GetFrameLevel() or 1) + 30)
-    if hasScroll then
-        popup.scrollBar:Show()
-        popup.scrollBar:SetMinMaxValues(0, popup.maxOffset)
-        popup.scrollBar:SetValueStep(1)
-    else
-        popup.scrollBar:Hide()
-        popup.scrollBar:SetMinMaxValues(0, 0)
-    end
-
+    popup.scrollBar:ClearAllPoints()
+    popup.scrollBar:SetPoint("TOPRIGHT", popup, "TOPRIGHT", -6, dropdown.qfxsaSearchable and -42 or -18)
+    popup.scrollBar:SetPoint("BOTTOMRIGHT", popup, "BOTTOMRIGHT", -6, 18)
     popup:ClearAllPoints()
     popup:SetPoint("TOPLEFT", dropdown, "BOTTOMLEFT", 0, -2)
 
-    for i = 1, visibleRows do
+    for i = 1, DROPDOWN_MAX_VISIBLE_ROWS do
         local row = EnsureDropdownRow(popup, i)
-        row:ClearAllPoints()
-        row:SetPoint("TOPLEFT", popup, "TOPLEFT", DROPDOWN_POPUP_PADDING, -DROPDOWN_POPUP_PADDING - ((i - 1) * DROPDOWN_ROW_HEIGHT))
-        row:SetSize(math.max(1, rowWidth), DROPDOWN_ROW_HEIGHT)
         row:SetFrameStrata("TOOLTIP")
         row:SetFrameLevel((popup:GetFrameLevel() or 1) + 50 + i)
         row:EnableMouse(true)
-        if row.Enable then
-            row:Enable()
-        end
+        if row.Enable then row:Enable() end
     end
 
-    local selectedIndex = 1
-    for i, item in ipairs(items) do
-        if dropdown.qfxsaMultiSelect then
-            if dropdown.qfxsaSelectedValues and dropdown.qfxsaSelectedValues[item.value] == true then
-                selectedIndex = i
-                break
-            end
-        elseif dropdown.qfxsaValue == item.value then
-            selectedIndex = i
-            break
-        end
-    end
-
-    local initialOffset = 0
-    if hasScroll and selectedIndex and selectedIndex > 1 then
-        initialOffset = selectedIndex - math.ceil(visibleRows / 2)
-    end
-    popup.SetPopupScroll(Clamp(initialOffset, 0, popup.maxOffset or 0))
+    dropdown.qfxsaSearchText = ""
+    popup.noResults:SetText(NS.L and NS.L("NO_MATCHING_SOUNDS") or "No matching sounds")
+    popup.searchBox:SetShown(dropdown.qfxsaSearchable == true)
+    if popup.searchBox.Instructions then popup.searchBox.Instructions:SetText(dropdown.qfxsaSearchPlaceholder or "") end
+    popup.searchBox:SetText("")
     popup:Show()
-    popup.RenderRows()
+    popup.RefreshFilter(false)
+    if dropdown.qfxsaSearchable then popup.searchBox:SetFocus() end
 end

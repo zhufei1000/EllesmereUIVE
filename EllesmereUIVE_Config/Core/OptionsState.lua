@@ -460,16 +460,6 @@ function NS.OptionsState:SyncStateFromWidgets(owner)
         return
     end
 
-    if widgets.classDrop then
-        state.classID = tonumber(widgets.classDrop:GetValue()) or state.classID or 0
-    end
-    if widgets.specDrop then
-        if (tonumber(state.classID) or 0) == ALL_CLASSES_ID then
-            state.specID = ALL_SPECS_ID
-        else
-            state.specID = tonumber(widgets.specDrop:GetValue()) or state.specID or 0
-        end
-    end
     if widgets.objectTypeItem then
         local isItem = type(widgets.objectTypeItem.GetValue) == "function" and widgets.objectTypeItem:GetValue() == true or (type(widgets.objectTypeItem.GetChecked) == "function" and widgets.objectTypeItem:GetChecked() == true)
         state.objectType = isItem and OBJECT_TYPE_ITEM or OBJECT_TYPE_SPELL

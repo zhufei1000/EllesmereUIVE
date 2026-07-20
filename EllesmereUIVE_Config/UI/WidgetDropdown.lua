@@ -105,6 +105,9 @@ function Widgets:CreateDropdown(parent, name, width)
     dropdown.qfxsaDisabled = false
     dropdown.qfxsaOuterWidth = width
     dropdown.qfxsaUnifiedPopup = true
+    dropdown.qfxsaSearchable = false
+    dropdown.qfxsaSearchPlaceholder = ""
+    dropdown.qfxsaSearchText = ""
     dropdown.qfxsaSetVisualText = SetDropDownVisualText
     dropdown:RegisterForClicks("LeftButtonUp")
     dropdown:EnableMouse(true)
@@ -154,6 +157,14 @@ function Widgets:CreateDropdown(parent, name, width)
         Skin:SkinDropDown(dropdown)
     end
     return dropdown
+end
+
+function Widgets:SetDropdownSearchable(dropdown, enabled, placeholder)
+    if not dropdown then return end
+    dropdown.qfxsaSearchable = enabled == true
+    dropdown.qfxsaSearchPlaceholder = tostring(placeholder or "")
+    dropdown.qfxsaSearchText = ""
+    if not dropdown.qfxsaSearchable then HideDropdownPopup(dropdown) end
 end
 
 function Widgets:SetDropdownItems(dropdown, items)

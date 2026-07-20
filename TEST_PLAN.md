@@ -1,4 +1,4 @@
-# EllesmereUIVE 1.0.2 Test Plan
+# EllesmereUIVE 1.0.3 Test Plan
 
 Use a clean copy of `!EllesmereUIVE_Bootstrap`, `EllesmereUIVE`, and `EllesmereUIVE_Config`. Keep the installed `EllesmereUI` and `EllesmereUICooldownManager` folders unchanged. Enable Lua error display before testing.
 
@@ -98,9 +98,9 @@ Expected: trigger logic and saved data formats are unchanged, and no `euiVoice` 
 - Bootstrap has no EUI dependency; the main addon depends on Bootstrap; Config remains load-on-demand.
 - No persistent synchronization `OnUpdate`, repeating ticker below one second, `debug.getupvalue`, or EUI source-file modification exists.
 - Every `SoundManifest.lua` path resolves to a real `.ogg` or `.mp3` file.
-- `EllesmereUIVE-1.0.2.zip` contains exactly the three addon folders at archive root.
+- `EllesmereUIVE-1.0.3.zip` contains exactly the three addon folders at archive root.
 
-## 1.0.2 automatic target-selection matrix
+## 1.0.3 automatic target-selection matrix
 
 ### A. Normal EUI custom cooldown skill
 
@@ -149,3 +149,12 @@ After injecting into a custom state, delete the entry. Restore `previousValue` o
 ### L. Regression pass
 
 Repeat Hosted Buff, arbitrary Buff-bar, reload-required media, early Bootstrap, profile/spec synchronization, cast-success, delay, TTS, Bloodlust, and schema-2 import/export tests.
+
+## 1.0.3 scope and sound-search regression
+
+1. Confirm the editor no longer creates class/spec single-select dropdowns and the scope selector restores all prior race/class/spec selections.
+2. Verify all/all, one class/all specs, one class/one spec, one class/multiple specs, and multiple-class mixed-spec selections.
+3. Confirm cast-success playback and current-spec login sync ignore entries whose class/spec/race maps do not match the player.
+4. Use Save and Inject on a multi-spec EUI voice and confirm every target `specProfile` receives the correct field while the current EUI UI refreshes once.
+5. Narrow the entry scope or delete it; confirm all matching injection records are removed while a field manually changed in EUI remains untouched.
+6. Search built-in sounds by display name, filename, and full path, and search LibSharedMedia sounds case-insensitively. Clearing search must restore the complete list without changing ordinary dropdowns.

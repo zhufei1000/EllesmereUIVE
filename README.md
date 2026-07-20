@@ -1,6 +1,6 @@
 # EllesmereUIVE
 
-EllesmereUIVE 1.0.2 is a standalone voice editor for the EllesmereUI Cooldown Manager. It preserves the addon's independent cast-success and Bloodlust voice alerts while delegating cooldown-ready and Buff gain/loss playback to EUI.
+EllesmereUIVE 1.0.3 is a standalone voice editor for the EllesmereUI Cooldown Manager. It preserves the addon's independent cast-success and Bloodlust voice alerts while delegating cooldown-ready and Buff gain/loss playback to EUI.
 
 ## Addon folders
 
@@ -8,7 +8,7 @@ EllesmereUIVE 1.0.2 is a standalone voice editor for the EllesmereUI Cooldown Ma
 - `EllesmereUIVE` contains the runtime, safe EUI database integration, cast-success alerts, and Bloodlust alerts.
 - `EllesmereUIVE_Config` is the load-on-demand configuration UI.
 
-Install all three folders directly under `Interface\AddOns`. Do not nest them inside an extra `EllesmereUIVE-1.0.2` folder.
+Install all three folders directly under `Interface\AddOns`. Do not nest them inside an extra `EllesmereUIVE-1.0.3` folder.
 
 ## EUI voice behavior
 

@@ -5,7 +5,7 @@ _G.EllesmereUIVENS = NS
 _G.EllesmereUIVE = NS
 _G.EUIVE = NS
 
-NS.VERSION = "1.0.2"
+NS.VERSION = "1.0.3"
 NS.ADDON_NAME = "EllesmereUIVE"
 NS.ADDON_CHAT_PREFIX = "|cff25d5a4[EUIVE]|r"
 NS.CONFIG_ADDON_NAME = "EllesmereUIVE_Config"
@@ -49,6 +49,11 @@ function NS:GetCurrentClassSpec()
     return classID, tonumber(specID) or 0
 end
 
+function NS:GetCurrentRaceID()
+    if type(UnitRace) == "function" then return tonumber(select(3, UnitRace("player"))) or 0 end
+    return 0
+end
+
 function NS:GetScopeList(classID, specID, create)
     classID, specID = tonumber(classID) or 0, tonumber(specID) or 0
     if create then
@@ -60,15 +65,22 @@ end
 
 function NS:GetCurrentEntries(entryType)
     local classID, specID = self:GetCurrentClassSpec()
-    local result = {}
-    local function collect(c, s)
-        for _, entry in pairs(self:GetScopeList(c, s, false)) do
-            if type(entry) == "table" and (not entryType or entry.entryType == entryType) then result[#result + 1] = entry end
+    local raceID = self:GetCurrentRaceID()
+    local resolver = self.Core and self.Core.ScopeResolver
+    local result, seenUID, seenEntry = {}, {}, {}
+    for _, classMap in pairs(EllesmereUIVEDB.specConfigs or {}) do
+        for _, entries in pairs(type(classMap) == "table" and classMap or {}) do
+            for _, entry in pairs(type(entries) == "table" and entries or {}) do
+                local uid = type(entry) == "table" and tostring(entry.entryUID or "") or ""
+                local duplicate = uid ~= "" and seenUID[uid] or seenEntry[entry]
+                local matches = resolver and resolver:EntryMatchesScope(entry, classID, specID, raceID)
+                if not duplicate and type(entry) == "table" and (not entryType or entry.entryType == entryType) and matches then
+                    result[#result + 1] = entry
+                    if uid ~= "" then seenUID[uid] = true else seenEntry[entry] = true end
+                end
+            end
         end
     end
-    collect(0, 0)
-    if classID ~= 0 then collect(classID, 0) end
-    if specID ~= 0 then collect(classID, specID) end
     table.sort(result, function(a, b) return tostring(a.entryUID or "") < tostring(b.entryUID or "") end)
     return result
 end
@@ -108,12 +120,6 @@ local function ScopeOverlaps(classA, specA, classB, specB)
     return classOverlap and specOverlap
 end
 
-local function ScopeIsCurrent(classID, specID)
-    local currentClass, currentSpec = NS:GetCurrentClassSpec()
-    return (tonumber(classID) == 0 or tonumber(classID) == currentClass)
-        and (tonumber(specID) == 0 or tonumber(specID) == currentSpec)
-end
-
 function NS:FindDuplicate(classID, specID, entry, excluding)
     for storedClass, classMap in pairs(EllesmereUIVEDB.specConfigs or {}) do
         for storedSpec, entries in pairs(type(classMap) == "table" and classMap or {}) do
@@ -151,6 +157,10 @@ function NS:AddEntry(classID, specID, entry)
 end
 
 local function SnapshotEntry(entry)
+    local resolver = NS.Core and NS.Core.ScopeResolver
+    local classMap = resolver and resolver.PreferredMap and resolver.PreferredMap(entry.alertClassIDs, entry.customClassIDs) or entry.alertClassIDs or entry.customClassIDs
+    local specMap = resolver and resolver.PreferredMap and resolver.PreferredMap(entry.alertSpecIDs, entry.customSpecIDs) or entry.alertSpecIDs or entry.customSpecIDs
+    local raceMap = resolver and resolver.PreferredMap and resolver.PreferredMap(entry.alertRaceIDs, entry.customRaceIDs) or entry.alertRaceIDs or entry.customRaceIDs
     local snapshot = {
         entryUID = entry.entryUID,
         entryType = entry.entryType,
@@ -166,11 +176,36 @@ local function SnapshotEntry(entry)
         sharedMediaSound = entry.sharedMediaSound,
         enabled = entry.enabled,
         voiceEnabled = entry.voiceEnabled,
+        alertClassIDs = NS.Core.Database.DeepCopy(classMap),
+        alertSpecIDs = NS.Core.Database.DeepCopy(specMap),
+        alertRaceIDs = NS.Core.Database.DeepCopy(raceMap),
     }
     snapshot.soundKey = NS.Core.EUISoundRegistry:BuildStableSoundKey(entry)
     return snapshot
 end
 NS.SnapshotEntry = SnapshotEntry
+
+local function SelectionSignature(map)
+    local ids = {}
+    for id, enabled in pairs(type(map) == "table" and map or {}) do
+        if enabled == true then ids[#ids + 1] = tonumber(id) or tostring(id) end
+    end
+    table.sort(ids, function(a, b) return tostring(a) < tostring(b) end)
+    for index, id in ipairs(ids) do ids[index] = tostring(id) end
+    return table.concat(ids, ",")
+end
+
+local function EUIDefinitionChanged(old, draft, oldClassID, oldSpecID, classID, specID)
+    if type(old) ~= "table" then return false end
+    local fields = { "entryType", "spellId", "euiTriggerType", "euiTargetMode", "euiTargetFamily", "soundSource",
+        "soundPath", "builtinSoundPath", "customSoundPath", "sharedMediaSound", "soundKey", "enabled", "voiceEnabled" }
+    for _, field in ipairs(fields) do if tostring(old[field]) ~= tostring(draft[field]) then return true end end
+    if tonumber(oldClassID) ~= tonumber(classID) or tonumber(oldSpecID) ~= tonumber(specID) then return true end
+    return SelectionSignature(old.alertClassIDs) ~= SelectionSignature(draft.alertClassIDs or draft.customClassIDs)
+        or SelectionSignature(old.alertSpecIDs) ~= SelectionSignature(draft.alertSpecIDs or draft.customSpecIDs)
+        or SelectionSignature(old.alertRaceIDs) ~= SelectionSignature(draft.alertRaceIDs or draft.customRaceIDs)
+end
+NS.EUIDefinitionChanged = EUIDefinitionChanged
 
 function NS:QueueEUIRemoval(entry)
     self.pendingEUIRemovals[#self.pendingEUIRemovals + 1] = SnapshotEntry(entry)
@@ -190,11 +225,11 @@ function NS:SaveEntry(draft, existing, classID, specID, injectNow)
     local integration = self.Integrations and self.Integrations.EllesmereUI
     local old = existing and SnapshotEntry(existing) or nil
     local changedScope = existing and (oldClassID ~= classID or oldSpecID ~= specID)
-    local changedTarget = old and ((not SameTarget(old, draft)) or changedScope)
+    local changedTarget = old and EUIDefinitionChanged(old, draft, oldClassID, oldSpecID, classID, specID)
     local disabling = draft.enabled == false or draft.voiceEnabled == false
     local oldInjectionChanged = false
     if old and old.entryType == "euiVoice" and (changedTarget or disabling or draft.entryType ~= "euiVoice") then
-        local removed, removeStatus, changed = integration:RemoveEntry(old, true)
+        local removed, removeStatus, changed = integration:RemoveEntryFromAllRecordedScopes(old, true)
         oldInjectionChanged = changed == true
         if not removed and removeStatus ~= "removed" and removeStatus ~= "waiting_combat" then self:QueueEUIRemoval(old) end
     end
@@ -222,16 +257,20 @@ function NS:SaveEntry(draft, existing, classID, specID, injectNow)
         self.Core.Database:NormalizeEUITarget(saved)
         local readiness = self.Core.EUISoundRegistry:GetNativeReadiness(saved)
         if injectNow == nil then injectNow = EllesmereUIVEDB.settings.autoInjectOnSave ~= false end
-        if saved.enabled ~= false and injectNow and ScopeIsCurrent(classID, specID) then
-            local ok, status, injectionChanged = integration:InjectEntry(saved, EllesmereUIVEDB.settings.overwriteEUI == true)
-            if oldInjectionChanged and injectionChanged ~= true and status ~= "waiting_combat" then integration:Refresh() end
+        if saved.enabled ~= false and injectNow then
+            local resolver = self.Core and self.Core.ScopeResolver
+            local targets = resolver and resolver:ResolveEntryTargets(saved) or {}
+            local _, status, stats = integration:InjectEntryToTargets(saved, targets, EllesmereUIVEDB.settings.overwriteEUI == true)
+            if oldInjectionChanged and stats.refreshRequired ~= true then integration:Refresh() end
             saved.injectionStatus = status
-            if status == "requires_reload" then self:NotifyReloadRequiredOnce() end
-            return saved, status, ok or status == "requires_reload" or status == "native_ready" or status == "preseeded"
-                or status == "waiting_for_eui_custom_state"
-        elseif saved.enabled ~= false and injectNow then
-            if oldInjectionChanged then integration:Refresh() end
-            return saved, "waiting_for_spec", true
+            saved.injectionStats = {
+                targetCount = tonumber(stats.targetCount) or 0, injected = tonumber(stats.injected) or 0,
+                upToDate = tonumber(stats.upToDate) or 0, waiting = tonumber(stats.waiting) or 0,
+                conflict = tonumber(stats.conflict) or 0, invalidSound = tonumber(stats.invalidSound) or 0,
+                unsupported = tonumber(stats.unsupported) or 0, reloadRequired = tonumber(stats.reloadRequired) or 0,
+            }
+            if saved.injectionStats.reloadRequired > 0 then self:NotifyReloadRequiredOnce() end
+            return saved, status, true
         elseif readiness == "requires_reload" then
             saved.injectionStatus = "requires_reload"
         end
@@ -248,7 +287,7 @@ function NS:DeleteEntry(entry)
     if type(entry) ~= "table" then return false end
     if entry.entryType == "euiVoice" then
         local snapshot = SnapshotEntry(entry)
-        local removed, status = self.Integrations.EllesmereUI:RemoveEntry(snapshot)
+        local removed, status = self.Integrations.EllesmereUI:RemoveEntryFromAllRecordedScopes(snapshot)
         if not removed and status ~= "removed" and status ~= "waiting_combat" then self:QueueEUIRemoval(snapshot) end
     end
     for _, classMap in pairs(EllesmereUIVEDB.specConfigs or {}) do
@@ -272,12 +311,34 @@ end
 function NS:InjectSavedEntry(entry)
     if type(entry) ~= "table" then return false, "unsupported_entry_type" end
     if entry.enabled == false or entry.voiceEnabled == false then return false, "disabled" end
-    local classID, specID = self:FindEntryScope(entry)
-    if classID == nil or not ScopeIsCurrent(classID, specID) then return false, "waiting_for_spec" end
-    local ok, status = self.Integrations.EllesmereUI:InjectEntry(entry, EllesmereUIVEDB.settings.overwriteEUI == true)
-    if status == "requires_reload" then self:NotifyReloadRequiredOnce() end
-    return ok or status == "requires_reload" or status == "native_ready" or status == "preseeded"
-        or status == "waiting_for_eui_custom_state", status
+    local resolver = self.Core and self.Core.ScopeResolver
+    local targets = resolver and resolver:ResolveEntryTargets(entry) or {}
+    local _, status, stats = self.Integrations.EllesmereUI:InjectEntryToTargets(entry, targets, EllesmereUIVEDB.settings.overwriteEUI == true)
+    entry.injectionStatus = status
+    entry.injectionStats = {
+        targetCount = tonumber(stats.targetCount) or 0, injected = tonumber(stats.injected) or 0,
+        upToDate = tonumber(stats.upToDate) or 0, waiting = tonumber(stats.waiting) or 0,
+        conflict = tonumber(stats.conflict) or 0, invalidSound = tonumber(stats.invalidSound) or 0,
+        unsupported = tonumber(stats.unsupported) or 0, reloadRequired = tonumber(stats.reloadRequired) or 0,
+    }
+    if entry.injectionStats.reloadRequired > 0 then self:NotifyReloadRequiredOnce() end
+    return true, status, stats
+end
+
+function NS:SyncSelectedEUIEntries()
+    self.Core.EUISoundRegistry:RegisterAllSavedEntries()
+    local entries, seenUID = {}, {}
+    for _, record in ipairs(self:GetAllEntries("euiVoice")) do
+        local entry = record.entry
+        local uid = tostring(entry.entryUID or "")
+        if entry.enabled ~= false and entry.voiceEnabled ~= false and (uid == "" or not seenUID[uid]) then
+            entries[#entries + 1] = entry
+            if uid ~= "" then seenUID[uid] = true end
+        end
+    end
+    local results, status, stats = self.Integrations.EllesmereUI:InjectAllTargets(entries, EllesmereUIVEDB.settings.overwriteEUI == true)
+    self.lastEUISyncResults, self.lastEUISyncStatus, self.lastEUISyncStats = results, status, stats
+    return results, status, stats
 end
 
 local reloadNoticeShown = false
@@ -345,7 +406,7 @@ function NS:ProcessPendingEUISync()
     local removalChanged = self.pendingEUIRefresh == true
     self.pendingEUIRefresh = false
     for _, oldEntry in ipairs(removals) do
-        local _, _, changed = integration:RemoveEntry(oldEntry, true)
+        local _, _, changed = integration:RemoveEntryFromAllRecordedScopes(oldEntry, true)
         removalChanged = changed == true or removalChanged
     end
     local results, status, stats

@@ -4,7 +4,7 @@
 ## Title-zhTW: EllesmereUIVE 設定
 ## Notes: Full saved-alert, collection, editor, and import/export UI for EllesmereUIVE.
 ## Author: zhufei1000
-## Version: 1.0.2
+## Version: 1.0.3
 ## Dependencies: EllesmereUIVE
 ## LoadOnDemand: 1
 ## IconTexture: Interface\AddOns\EllesmereUIVE\AppIcon.png

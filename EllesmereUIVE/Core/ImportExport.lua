@@ -338,7 +338,7 @@ function ImportExport:ImportPayload(payload)
                 for _, entry in pairs(type(entries) == "table" and entries or {}) do
                     if type(entry) == "table" and entry.entryType == "euiVoice" then
                         local snapshot = NS.SnapshotEntry(entry)
-                        local removed, removeStatus, changed = integration:RemoveEntry(snapshot, true)
+                        local removed, removeStatus, changed = integration:RemoveEntryFromAllRecordedScopes(snapshot, true)
                         removalChanged = changed == true or removalChanged
                         if not removed and removeStatus ~= "removed" and removeStatus ~= "waiting_combat" then NS:QueueEUIRemoval(snapshot) end
                     end

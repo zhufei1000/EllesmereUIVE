@@ -30,28 +30,12 @@ local function SetShown(frame, shown)
     if frame then frame:SetShown(shown == true) end
 end
 
-local function ScopeMap(value)
-    return { [tonumber(value) or 0] = true }
-end
-
-local function FirstSelected(map, fallback)
-    for id, enabled in pairs(type(map) == "table" and map or {}) do
-        if enabled == true then return tonumber(id) or fallback end
-    end
-    return fallback
-end
-
 function Fields:PullFromWidgets(editor)
     local frame = editor and editor.frame
     local w = frame and frame.widgets
     if not w then return end
     local state = NS.AceOptions:GetState()
 
-    state.classID = tonumber(GetValue(w.classDrop, state.classID)) or 0
-    state.specID = tonumber(GetValue(w.specDrop, state.specID)) or 0
-    if state.classID == 0 then state.specID = 0 end
-    state.alertClassIDs = ScopeMap(state.classID)
-    state.alertSpecIDs = ScopeMap(state.specID)
     state.spellId = tonumber(w.spellId:GetText()) or 0
     state.spellName = Trim(w.spellName:GetText())
     state.euiTriggerType = tostring(GetValue(w.euiTriggerDrop, state.euiTriggerType or "cdReady"))
@@ -85,22 +69,6 @@ function Fields:PullFromWidgets(editor)
     return state
 end
 
-local function BuildClassItems()
-    local items = {}
-    for _, option in ipairs(NS.AceOptions:GetClassOptionList()) do
-        items[#items + 1] = { value = option.classID, text = option.className }
-    end
-    return items
-end
-
-local function BuildSpecItems(classID)
-    local items = {}
-    for _, option in ipairs(NS.AceOptions:GetSpecOptionList(classID)) do
-        items[#items + 1] = { value = option.specID, text = option.specName }
-    end
-    return items
-end
-
 function Fields:PushToWidgets(editor)
     local frame = editor and editor.frame
     local w = frame and frame.widgets
@@ -110,8 +78,6 @@ function Fields:PushToWidgets(editor)
     local isEUI, isCast, isBloodlust = entryType == "euiVoice", entryType == "cast", entryType == "bloodlust"
 
     if Widgets then
-        Widgets:SetDropdownItems(w.classDrop, BuildClassItems())
-        Widgets:SetDropdownItems(w.specDrop, BuildSpecItems(tonumber(state.classID) or 0))
         Widgets:SetDropdownItems(w.euiTriggerDrop, {
             { value = "cdReady", text = L("TRIGGER_CD") },
             { value = "buffGain", text = L("TRIGGER_GAIN") },
@@ -120,12 +86,10 @@ function Fields:PushToWidgets(editor)
         Widgets:SetDropdownItems(w.soundSourceDrop, SoundFields:GetSourceItems(not isEUI))
         Widgets:SetDropdownItems(w.builtinDrop, SoundFields:GetBuiltinItems())
         Widgets:SetDropdownItems(w.sharedMediaDrop, SoundFields:GetSharedMediaItems())
+        Widgets:SetDropdownSearchable(w.builtinDrop, true, L("SEARCH_SOUNDS_PLACEHOLDER"))
+        Widgets:SetDropdownSearchable(w.sharedMediaDrop, true, L("SEARCH_SOUNDS_PLACEHOLDER"))
     end
 
-    state.classID = tonumber(state.classID) or FirstSelected(state.alertClassIDs, 0)
-    state.specID = tonumber(state.specID) or FirstSelected(state.alertSpecIDs, 0)
-    SetValue(w.classDrop, state.classID, L("PLACEHOLDER_SELECT_CLASS"))
-    SetValue(w.specDrop, state.specID, L("PLACEHOLDER_SELECT_SPEC"))
     SetValue(w.euiTriggerDrop, state.euiTriggerType or "cdReady", L("TRIGGER_CD"))
     if isEUI and state.soundSource == "tts" then state.soundSource = "builtin" end
     SetValue(w.soundSourceDrop, state.soundSource or "builtin", L("LABEL_BUILTIN_SOUND"))

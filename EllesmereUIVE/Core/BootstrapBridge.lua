@@ -28,6 +28,7 @@ function Bridge:ResolveCustomSoundKey(path) return Call("ResolveCustomSoundKey",
 function Bridge:RegisterSavedEntry(entry) return Call("RegisterSavedEntry", entry) end
 function Bridge:RegisterAllSavedEntries() return Call("RegisterAllSavedEntries") end
 function Bridge:PreseedEntry(entry, classID, specID) return Call("PreseedEntry", entry, classID, specID) end
+function Bridge:PreseedEntryForSpec(entry, classID, specID) return Call("PreseedEntryForSpec", entry, classID, specID) end
 function Bridge:PreseedCurrentScope() return Call("PreseedCurrentScope") end
 function Bridge:GetRuntimeStatus() return Call("GetRuntimeStatus") or {} end
 function Bridge:NormalizePath(path) return Call("NormalizePath", path) or tostring(path or "") end

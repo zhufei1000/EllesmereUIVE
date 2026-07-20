@@ -144,7 +144,7 @@ local function RemoveEUIInjection(entry)
     local integration = NS.Integrations and NS.Integrations.EllesmereUI
     if not integration then return end
     local snapshot = type(NS.SnapshotEntry) == "function" and NS.SnapshotEntry(entry) or entry
-    local removed, status = integration:RemoveEntry(snapshot)
+    local removed, status = integration:RemoveEntryFromAllRecordedScopes(snapshot)
     if not removed and status ~= "removed" and status ~= "waiting_combat" and type(NS.QueueEUIRemoval) == "function" then
         NS:QueueEUIRemoval(snapshot)
     end

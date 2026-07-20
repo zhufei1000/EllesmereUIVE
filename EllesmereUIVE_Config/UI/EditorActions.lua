@@ -41,20 +41,6 @@ function Actions:Install(owner, frame)
     w.tabCast:SetScript("OnClick", function() owner:SwitchEntryType("cast") end)
     w.tabBloodlust:SetScript("OnClick", function() owner:SwitchEntryType("bloodlust") end)
 
-    w.classDrop.qfxsaOnValueChanged = function(value)
-        local state = Pull(owner) or NS.AceOptions:GetState()
-        state.classID = tonumber(value) or 0
-        state.specID = 0
-        state.alertClassIDs = { [state.classID] = true }
-        state.alertSpecIDs = { [0] = true }
-        Refresh(owner)
-    end
-    w.specDrop.qfxsaOnValueChanged = function(value)
-        local state = Pull(owner) or NS.AceOptions:GetState()
-        state.specID = tonumber(value) or 0
-        state.alertSpecIDs = { [state.specID] = true }
-        Refresh(owner)
-    end
     w.euiTriggerDrop.qfxsaOnValueChanged = function(value)
         NS.AceOptions:GetState().euiTriggerType = tostring(value or "cdReady")
     end

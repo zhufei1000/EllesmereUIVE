@@ -16,6 +16,10 @@ local function SortedItems(map)
     return items
 end
 
+local function FileName(path)
+    return tostring(path or ""):gsub("/", "\\"):match("([^\\]+)$") or tostring(path or "")
+end
+
 function SoundFields:GetSourceItems(allowTTS)
     local items = {
         { value = "builtin", text = L("LABEL_BUILTIN_SOUND") },
@@ -27,14 +31,20 @@ function SoundFields:GetSourceItems(allowTTS)
 end
 
 function SoundFields:GetBuiltinItems()
-    return SortedItems(NS.AceOptions and NS.AceOptions:GetBuiltinSoundList() or {})
+    local items = SortedItems(NS.AceOptions and NS.AceOptions:GetBuiltinSoundList() or {})
+    for _, item in ipairs(items) do
+        item.searchText = table.concat({ tostring(item.text or ""), tostring(item.value or ""), FileName(item.value) }, " ")
+    end
+    return items
 end
 
 function SoundFields:GetSharedMediaItems()
     local source = NS.AceOptions and NS.AceOptions:GetSharedMediaSoundList() or {}
     local names = {}
     for name in pairs(source) do names[name] = name end
-    return SortedItems(names)
+    local items = SortedItems(names)
+    for _, item in ipairs(items) do item.searchText = tostring(item.text or "") .. " " .. tostring(item.value or "") end
+    return items
 end
 
 function SoundFields:Resolve(state)
