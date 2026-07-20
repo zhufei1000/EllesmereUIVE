@@ -40,7 +40,7 @@ Expected: an already-armed CD/Buff family applies immediately; a family with no 
 2. Inspect the active EUI spec profile.
 3. Add the spell to an EUI cooldown bar and trigger `_ECME_Apply` through the normal EUI UI.
 
-Expected: `spellSettingsCD[spellID].cdReadySoundKey` exists before the bar spell; adding the spell requires no preset re-edit.
+Expected: the preset remains visible with status `waiting_for_skill` / “等待技能加入EUI”; after adding the spell, synchronization applies it without requiring a preset re-edit.
 
 ## 6. Hosted Buff
 

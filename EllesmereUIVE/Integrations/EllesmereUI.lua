@@ -114,6 +114,12 @@ local function FindCustomState(context, spellID)
     return nil, nil, states
 end
 
+local function IsSkillPresent(context, spellID)
+    if FindCustomState(context, spellID) then return true end
+    local foundCD, foundBuff = DiscoverFamilies(context and context.specProfile, spellID)
+    return foundCD or foundBuff
+end
+
 local function IsForcedTarget(entry)
     if tostring(entry and entry.euiTargetMode or "") ~= "forced" then return false end
     local family = tostring(entry and entry.euiTargetFamily or "")
@@ -257,7 +263,8 @@ local function BuildPlan(self, context, entry, overwrite)
     local record = records and records[trigger] or nil
     local owned = IsOwnedValue(current) or (type(record) == "table" and current == record.injectedValue)
     if not IsEmpty(current) and current ~= injectedValue and not owned and overwrite ~= true then return nil, "conflict" end
-    local status = readiness == "requires_reload" and "requires_reload"
+    local status = (not IsSkillPresent(context, spellID)) and "waiting_for_skill"
+        or readiness == "requires_reload" and "requires_reload"
         or (family == "customActiveStates" and "custom_state_injected" or "native_ready")
     return {
         entry = entry,
@@ -340,7 +347,7 @@ end
 local function CountStatus(stats, status)
     if status == "native_ready" or status == "preseeded" or status == "custom_state_injected" then stats.injected = stats.injected + 1
     elseif status == "up_to_date" then stats.upToDate = stats.upToDate + 1
-    elseif status == "waiting_for_eui" or status == "waiting_for_spec" or status == "waiting_for_eui_custom_state"
+    elseif status == "waiting_for_eui" or status == "waiting_for_spec" or status == "waiting_for_eui_custom_state" or status == "waiting_for_skill"
         or status == "waiting_combat" or status == "saved_waiting_sync" then stats.waiting = stats.waiting + 1
     elseif status == "requires_reload" then stats.reloadRequired = stats.reloadRequired + 1
     elseif status == "conflict" then stats.conflict = stats.conflict + 1
@@ -495,6 +502,7 @@ function Integration:GetInjectionStatus(entry)
     local records = GetRecordTable(context.profileKey, context.specKey, spellID, false)
     local record = records and records[trigger] or nil
     if type(record) == "table" and value == record.injectedValue then
+        if not IsSkillPresent(context, spellID) then return "waiting_for_skill" end
         if readiness == "requires_reload" or record.requiresReload == true then return "requires_reload" end
         return family == "customActiveStates" and "custom_state_injected" or "native_ready"
     end

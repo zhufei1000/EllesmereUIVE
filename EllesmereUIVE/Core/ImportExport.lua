@@ -16,7 +16,7 @@ local function Copy(value)
     return NS.Core.Database.DeepCopy(value)
 end
 
-local function ExportEntry(entry, classID, specID)
+local function ExportEntry(entry, classID, specID, originalIndex)
     local item = {
         entryUID = entry.entryUID,
         entryType = entry.entryType,
@@ -44,6 +44,7 @@ local function ExportEntry(entry, classID, specID)
         alertSpecIDs = Copy(entry.alertSpecIDs),
         classID = tonumber(classID) or 0,
         specID = tonumber(specID) or 0,
+        originalIndex = tonumber(originalIndex),
     }
     return item
 end
@@ -53,9 +54,9 @@ function ImportExport:BuildPayload()
     local eui, cast = {}, {}
     for classID, classMap in pairs(db.specConfigs or {}) do
         for specID, entries in pairs(type(classMap) == "table" and classMap or {}) do
-            for _, entry in pairs(type(entries) == "table" and entries or {}) do
-                if entry.entryType == "euiVoice" then eui[#eui + 1] = ExportEntry(entry, classID, specID)
-                elseif entry.entryType == "cast" then cast[#cast + 1] = ExportEntry(entry, classID, specID) end
+            for index, entry in pairs(type(entries) == "table" and entries or {}) do
+                if entry.entryType == "euiVoice" then eui[#eui + 1] = ExportEntry(entry, classID, specID, index)
+                elseif entry.entryType == "cast" then cast[#cast + 1] = ExportEntry(entry, classID, specID, index) end
             end
         end
     end
@@ -84,28 +85,65 @@ function ImportExport:BuildEntryPayload(entry)
     local classID, specID = NS:FindEntryScope(entry)
     if classID == nil then return nil, "entry scope is unavailable" end
     local payload = EmptyPayload("single")
-    local exported = ExportEntry(entry, classID, specID)
+    local originalIndex
+    for index, current in pairs(NS:GetScopeList(classID, specID, false)) do
+        if current == entry then originalIndex = index break end
+    end
+    local exported = ExportEntry(entry, classID, specID, originalIndex)
     if entry.entryType == "euiVoice" then payload.euiVoiceEntries[1] = exported
     elseif entry.entryType == "cast" then payload.castEntries[1] = exported
     else return nil, "unsupported entry type" end
     return payload
 end
 
-function ImportExport:BuildCollectionPayload(classID, specID)
+function ImportExport:BuildCollectionPayload(classID, specID, groupID)
     classID, specID = tonumber(classID) or 0, tonumber(specID) or 0
+    groupID = tostring(groupID or "")
     local payload = EmptyPayload("collection")
-    for _, entry in pairs(NS:GetScopeList(classID, specID, false)) do
-        if type(entry) == "table" then
-            local exported = ExportEntry(entry, classID, specID)
-            if entry.entryType == "euiVoice" then payload.euiVoiceEntries[#payload.euiVoiceEntries + 1] = exported
-            elseif entry.entryType == "cast" then payload.castEntries[#payload.castEntries + 1] = exported end
-        end
-    end
     local classCollections = EllesmereUIVEDB.collectionData and EllesmereUIVEDB.collectionData[classID]
     local scopeCollection = type(classCollections) == "table" and classCollections[specID] or nil
-    if scopeCollection then
-        payload.collectionData[classID] = { [specID] = Copy(scopeCollection) }
+    local groups = type(scopeCollection) == "table" and scopeCollection.groups or nil
+    if groupID == "" or type(groups) ~= "table" or type(groups[groupID]) ~= "table" then
+        return nil, "collection is unavailable"
     end
+
+    payload.collectionClassID = classID
+    payload.collectionSpecID = specID
+    payload.collectionRootGroupID = groupID
+    payload.collectionGroups = {}
+    local exportedEntryKeys = {}
+    local entryMap = NS:GetScopeList(classID, specID, false)
+
+    local function collectGroup(currentID, seen)
+        currentID = tostring(currentID or "")
+        if seen[currentID] or type(groups[currentID]) ~= "table" then return end
+        seen[currentID] = true
+        local group = groups[currentID]
+        payload.collectionGroups[currentID] = Copy(group)
+        for _, ref in ipairs(type(group.entries) == "table" and group.entries or {}) do
+            local childID = tostring(ref or ""):match("^group:%-?%d+:%-?%d+:(.+)$")
+            if childID and type(groups[childID]) == "table" then
+                collectGroup(childID, seen)
+            else
+                local refClass, refSpec, refIndex = tostring(ref or ""):match("^(%-?%d+):(%-?%d+):(%-?%d+)$")
+                refClass, refSpec, refIndex = tonumber(refClass), tonumber(refSpec), tonumber(refIndex)
+                if not refIndex and tonumber(ref) then
+                    refClass, refSpec, refIndex = classID, specID, tonumber(ref)
+                end
+                local key = refIndex and string.format("%d:%d:%d", refClass or classID, refSpec or specID, refIndex) or nil
+                local entry = refIndex and entryMap[refIndex] or nil
+                if key and type(entry) == "table" and not exportedEntryKeys[key] then
+                    local exported = ExportEntry(entry, classID, specID, refIndex)
+                    exported.originalKey = key
+                    if entry.entryType == "euiVoice" then payload.euiVoiceEntries[#payload.euiVoiceEntries + 1] = exported
+                    elseif entry.entryType == "cast" then payload.castEntries[#payload.castEntries + 1] = exported end
+                    exportedEntryKeys[key] = true
+                end
+            end
+        end
+    end
+
+    collectGroup(groupID, {})
     return payload
 end
 
@@ -173,6 +211,118 @@ local function ImportEntry(source, forcedType)
     return entry
 end
 
+local function EntryKey(classID, specID, index)
+    return string.format("%d:%d:%d", tonumber(classID) or 0, tonumber(specID) or 0, tonumber(index) or 0)
+end
+
+local function FindEntryIndex(classID, specID, wanted)
+    for index, entry in pairs(NS:GetScopeList(classID, specID, false)) do
+        if entry == wanted then return tonumber(index) end
+    end
+end
+
+local function StoreImportedEntry(source, forcedType, preferOriginalIndex, reuseDuplicate)
+    local entry = ImportEntry(source, forcedType)
+    if not entry then return nil end
+    local classID, specID = tonumber(source.classID) or 0, tonumber(source.specID) or 0
+    if reuseDuplicate and type(NS.FindDuplicate) == "function" then
+        local duplicate = NS:FindDuplicate(classID, specID, entry)
+        if duplicate then
+            local duplicateClass, duplicateSpec = NS:FindEntryScope(duplicate)
+            local duplicateIndex = FindEntryIndex(duplicateClass, duplicateSpec, duplicate)
+            return duplicate, duplicateClass, duplicateSpec, duplicateIndex, false
+        end
+    end
+    local list = NS:GetScopeList(classID, specID, true)
+    local index = preferOriginalIndex and tonumber(source.originalIndex) or nil
+    if not index or index <= 0 or list[index] ~= nil then
+        index = 1
+        while list[index] ~= nil do index = index + 1 end
+    end
+    entry.entryUID = NS.Core.Database:NextEntryUID()
+    entry.entryUID = tostring(entry.entryUID)
+    entry.classID, entry.specID = classID, specID
+    entry.injected, entry.injectionStatus = nil, nil
+    list[index] = entry
+    return entry, classID, specID, index, true
+end
+
+local function FindGroupByName(scope, name)
+    name = tostring(name or ""):match("^%s*(.-)%s*$")
+    if name == "" then return nil end
+    for groupID, group in pairs(type(scope) == "table" and scope.groups or {}) do
+        if type(group) == "table" and tostring(group.name or ""):match("^%s*(.-)%s*$") == name then
+            return tostring(groupID)
+        end
+    end
+end
+
+local function ImportCollectionGroups(payload, keyMap)
+    local classID = tonumber(payload.collectionClassID) or 0
+    local specID = tonumber(payload.collectionSpecID) or 0
+    local oldRootID = tostring(payload.collectionRootGroupID or "")
+    local sourceGroups = type(payload.collectionGroups) == "table" and payload.collectionGroups or nil
+    if not sourceGroups or oldRootID == "" or type(sourceGroups[oldRootID]) ~= "table" then return false end
+
+    EllesmereUIVEDB.collectionData[classID] = EllesmereUIVEDB.collectionData[classID] or {}
+    local scope = EllesmereUIVEDB.collectionData[classID][specID]
+    if type(scope) ~= "table" then scope = { root = {}, groups = {} }; EllesmereUIVEDB.collectionData[classID][specID] = scope end
+    scope.root = type(scope.root) == "table" and scope.root or {}
+    scope.groups = type(scope.groups) == "table" and scope.groups or {}
+
+    local groupIDMap = {}
+    for oldID, group in pairs(sourceGroups) do
+        if type(group) == "table" then
+            oldID = tostring(oldID)
+            local newID
+            if oldID == oldRootID then newID = FindGroupByName(scope, group.name) end
+            if not newID then
+                EllesmereUIVEDB.collectionSerial = math.max(0, tonumber(EllesmereUIVEDB.collectionSerial) or 0) + 1
+                newID = "g" .. tostring(EllesmereUIVEDB.collectionSerial)
+            end
+            groupIDMap[oldID] = newID
+        end
+    end
+
+    for oldID, group in pairs(sourceGroups) do
+        local newID = groupIDMap[tostring(oldID)]
+        if newID and type(group) == "table" then
+            local refs = {}
+            for _, oldRef in ipairs(type(group.entries) == "table" and group.entries or {}) do
+                local childID = tostring(oldRef or ""):match("^group:%-?%d+:%-?%d+:(.+)$")
+                if childID and groupIDMap[childID] then
+                    refs[#refs + 1] = string.format("group:%d:%d:%s", classID, specID, groupIDMap[childID])
+                else
+                    local oldClass, oldSpec, oldIndex = tostring(oldRef or ""):match("^(%-?%d+):(%-?%d+):(%-?%d+)$")
+                    local oldKey = oldIndex and EntryKey(oldClass, oldSpec, oldIndex) or nil
+                    local newKey = oldKey and keyMap[oldKey] or nil
+                    if newKey then refs[#refs + 1] = newKey end
+                end
+            end
+            scope.groups[newID] = {
+                name = tostring(group.name or "Imported Collection"),
+                iconID = tonumber(group.iconID),
+                collapsed = group.collapsed == true,
+                entries = refs,
+            }
+        end
+    end
+
+    local newRootID = groupIDMap[oldRootID]
+    if newRootID then
+        local present = false
+        for _, item in ipairs(scope.root) do
+            if type(item) == "table" and item.type == "group" and tostring(item.id) == newRootID then present = true break end
+        end
+        if not present then scope.root[#scope.root + 1] = { type = "group", id = newRootID } end
+    end
+    local store = NS.CollectionStore
+    if store and type(store.NormalizeCollectionScope) == "function" and NS.API then
+        store.NormalizeCollectionScope(scope, NS:GetScopeList(classID, specID, false), classID, specID, NS.API)
+    end
+    return true
+end
+
 function ImportExport:ImportPayload(payload)
     if type(payload) ~= "table" or payload.addon ~= "EllesmereUIVE" or tonumber(payload.schemaVersion) ~= 2 then
         return false, "unsupported schema"
@@ -197,15 +347,22 @@ function ImportExport:ImportPayload(payload)
         end
         EllesmereUIVEDB.specConfigs = {}
     end
-    local added = 0
-    for _, source in ipairs(type(payload.euiVoiceEntries) == "table" and payload.euiVoiceEntries or {}) do
-        local entry = ImportEntry(source, "euiVoice")
-        if entry and NS:AddEntry(tonumber(source.classID) or 0, tonumber(source.specID) or 0, entry) then added = added + 1 end
+    local added, keyMap = 0, {}
+    local function importList(list, forcedType)
+        for _, source in ipairs(type(list) == "table" and list or {}) do
+            local _, newClass, newSpec, newIndex, wasAdded = StoreImportedEntry(source, forcedType, replaceAll, not replaceAll)
+            if newIndex then
+                local oldKey = tostring(source.originalKey or "")
+                if oldKey == "" and tonumber(source.originalIndex) then
+                    oldKey = EntryKey(source.classID, source.specID, source.originalIndex)
+                end
+                if oldKey ~= "" then keyMap[oldKey] = EntryKey(newClass, newSpec, newIndex) end
+                if wasAdded then added = added + 1 end
+            end
+        end
     end
-    for _, source in ipairs(type(payload.castEntries) == "table" and payload.castEntries or {}) do
-        local entry = ImportEntry(source, "cast")
-        if entry and NS:AddEntry(tonumber(source.classID) or 0, tonumber(source.specID) or 0, entry) then added = added + 1 end
-    end
+    importList(payload.euiVoiceEntries, "euiVoice")
+    importList(payload.castEntries, "cast")
     if replaceAll and type(payload.bloodlust) == "table" then
         EllesmereUIVEDB.bloodlust = Copy(payload.bloodlust)
         local paths = EllesmereUIVEDB.bloodlust.customSoundPaths
@@ -219,6 +376,8 @@ function ImportExport:ImportPayload(payload)
     if replaceAll then
         EllesmereUIVEDB.collectionData = Copy(payload.collectionData or {})
         EllesmereUIVEDB.savedListOrder = Copy(payload.savedListOrder or {})
+    elseif mode == "collection" and type(payload.collectionGroups) == "table" then
+        ImportCollectionGroups(payload, keyMap)
     elseif mode == "collection" and type(payload.collectionData) == "table" then
         for classID, classMap in pairs(payload.collectionData) do
             EllesmereUIVEDB.collectionData[classID] = EllesmereUIVEDB.collectionData[classID] or {}
@@ -232,7 +391,13 @@ function ImportExport:ImportPayload(payload)
     if bridge and not (InCombatLockdown and InCombatLockdown()) then bridge:PreseedCurrentScope() end
     NS:RebuildVoiceRuntime()
     NS.pendingEUIRefresh = removalChanged or NS.pendingEUIRefresh
-    NS:RequestEUISync("IMPORT")
+    -- Imported EUI voices stay visible in the shared saved-list immediately,
+    -- but synchronization remains an explicit toolbar action.
+    NS.pendingEUISync = false
+    if ((type(NS.pendingEUIRemovals) == "table" and #NS.pendingEUIRemovals > 0) or NS.pendingEUIRefresh == true)
+        and type(NS.ProcessPendingEUISync) == "function" then
+        NS:ProcessPendingEUISync()
+    end
     if (tonumber(reloadRequired) or 0) > 0 then
         if NS.NotifyReloadRequiredOnce then NS:NotifyReloadRequiredOnce() end
         return true, added, "requires_reload"
