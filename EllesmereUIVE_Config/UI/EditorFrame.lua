@@ -160,6 +160,10 @@ function EditorFrame:OpenForNew(entryType)
 
     NS.AceOptions:EnsureValidScope()
     NS.AceOptions:ClearEditorFields()
+    state.editingEntryUID = nil
+    state.originalClassID = nil
+    state.originalSpecID = nil
+    state.originalIndex = nil
     state._editorDrafts = {}
     state._mcdCustomNotifyVisibleCount = nil
     state._mcdCustomNotifyManualCount = nil

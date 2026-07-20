@@ -48,16 +48,9 @@ end
 local function CleanTransientEntryFields(entry)
     if type(entry) ~= "table" then return end
     entry.injected = nil
-    if entry.injectionStatus ~= "batch_complete" then
-        entry.injectionStatus = nil
-        entry.injectionStats = nil
-    elseif type(entry.injectionStats) == "table" then
-        local clean = {}
-        for _, key in ipairs({ "targetCount", "injected", "upToDate", "waiting", "conflict", "invalidSound", "unsupported", "reloadRequired" }) do
-            clean[key] = math.max(0, tonumber(entry.injectionStats[key]) or 0)
-        end
-        entry.injectionStats = clean
-    end
+    entry.injectionStatus = nil
+    entry.injectionStats = nil
+    entry.requiresReload = nil
     if entry.entryUID then
         EllesmereUIVEDB.entrySerial = math.max(EllesmereUIVEDB.entrySerial, tonumber(entry.entryUID) or 0)
     else

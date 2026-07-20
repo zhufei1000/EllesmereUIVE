@@ -85,14 +85,14 @@ local function RegisterSavedEntry(entry)
     local source = tostring(entry.soundSource or "custom")
     if source == "sharedmedia" then
         local key = tostring(entry.sharedMediaSound or "")
+        if key == "" then return nil, "sharedmedia_missing" end
         local lsm = GetLSM()
         local path = lsm and lsm.Fetch and lsm:Fetch("sound", key, true) or nil
         entry.bootstrapMediaMissing = path == nil
-        if not path then return nil, "sharedmedia_missing" end
         entry.soundKey = key
         entry.registeredBeforeEUI = not AddOnLoaded("EllesmereUICooldownManager")
         if entry.registeredBeforeEUI then NS.RegisteredBeforeEUI[key] = true end
-        return key, "sharedmedia_ready"
+        return key, path and "sharedmedia_ready" or "sharedmedia_key_preseeded"
     end
 
     local path = ResolveEntryPath(entry)
@@ -487,7 +487,7 @@ local function PreseedEntry(entry, classID, specID, targetSpecID)
             soundKey = injectedValue,
             previousValue = previousValue,
             injectedValue = injectedValue,
-            injectedAtVersion = "1.0.3",
+            injectedAtVersion = "1.0.4",
             family = family,
             field = field,
             customStateKey = family == "customActiveStates" and actualKey or nil,

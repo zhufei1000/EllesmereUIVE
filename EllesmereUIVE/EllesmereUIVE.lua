@@ -5,7 +5,7 @@ _G.EllesmereUIVENS = NS
 _G.EllesmereUIVE = NS
 _G.EUIVE = NS
 
-NS.VERSION = "1.0.3"
+NS.VERSION = "1.0.4"
 NS.ADDON_NAME = "EllesmereUIVE"
 NS.ADDON_CHAT_PREFIX = "|cff25d5a4[EUIVE]|r"
 NS.CONFIG_ADDON_NAME = "EllesmereUIVE_Config"
@@ -13,6 +13,25 @@ NS.pendingEUIRemovals = NS.pendingEUIRemovals or {}
 NS.internalApplyInProgress = false
 NS.lastProfileKey = NS.lastProfileKey or nil
 NS.lastSpecKey = NS.lastSpecKey or nil
+NS.RuntimeInjectionStats = NS.RuntimeInjectionStats or {}
+
+function NS:SetRuntimeInjectionStats(entry, stats)
+    local uid = type(entry) == "table" and tostring(entry.entryUID or "") or ""
+    if uid == "" then return end
+    self.RuntimeInjectionStats[uid] = {
+        targetCount = tonumber(stats and stats.targetCount) or 0,
+        injected = tonumber(stats and stats.injected) or 0,
+        upToDate = tonumber(stats and stats.upToDate) or 0,
+        waiting = tonumber(stats and stats.waiting) or 0,
+        conflict = tonumber(stats and stats.conflict) or 0,
+        invalidSound = tonumber(stats and stats.invalidSound) or 0,
+        unsupported = tonumber(stats and stats.unsupported) or 0,
+        reloadRequired = tonumber(stats and stats.reloadRequired) or 0,
+    }
+    if self.SavedListLayout and type(self.SavedListLayout.InvalidateCache) == "function" then
+        self.SavedListLayout:InvalidateCache()
+    end
+end
 
 function NS:Print(message)
     local text = self.ADDON_CHAT_PREFIX .. " " .. tostring(message or "")
@@ -150,7 +169,7 @@ function NS:AddEntry(classID, specID, entry)
     entry.entryUID = entry.entryUID or self.Core.Database:NextEntryUID()
     entry.entryUID = tostring(entry.entryUID)
     entry.classID, entry.specID = tonumber(classID) or 0, tonumber(specID) or 0
-    entry.injected, entry.injectionStatus = nil, nil
+    entry.injected, entry.injectionStatus, entry.injectionStats = nil, nil, nil
     local list = self:GetScopeList(classID, specID, true)
     list[#list + 1] = entry
     return entry
@@ -250,7 +269,7 @@ function NS:SaveEntry(draft, existing, classID, specID, injectNow)
         saved = self:AddEntry(classID, specID, draft)
         if not saved then return nil, "duplicate" end
     end
-    saved.injected, saved.injectionStatus = nil, nil
+    saved.injected, saved.injectionStatus, saved.injectionStats = nil, nil, nil
     if saved.entryType == "euiVoice" then
         saved.enabled = saved.enabled ~= false and saved.voiceEnabled ~= false
         saved.voiceEnabled = saved.enabled
@@ -262,17 +281,9 @@ function NS:SaveEntry(draft, existing, classID, specID, injectNow)
             local targets = resolver and resolver:ResolveEntryTargets(saved) or {}
             local _, status, stats = integration:InjectEntryToTargets(saved, targets, EllesmereUIVEDB.settings.overwriteEUI == true)
             if oldInjectionChanged and stats.refreshRequired ~= true then integration:Refresh() end
-            saved.injectionStatus = status
-            saved.injectionStats = {
-                targetCount = tonumber(stats.targetCount) or 0, injected = tonumber(stats.injected) or 0,
-                upToDate = tonumber(stats.upToDate) or 0, waiting = tonumber(stats.waiting) or 0,
-                conflict = tonumber(stats.conflict) or 0, invalidSound = tonumber(stats.invalidSound) or 0,
-                unsupported = tonumber(stats.unsupported) or 0, reloadRequired = tonumber(stats.reloadRequired) or 0,
-            }
-            if saved.injectionStats.reloadRequired > 0 then self:NotifyReloadRequiredOnce() end
+            self:SetRuntimeInjectionStats(saved, stats)
+            if (tonumber(stats.reloadRequired) or 0) > 0 then self:NotifyReloadRequiredOnce() end
             return saved, status, true
-        elseif readiness == "requires_reload" then
-            saved.injectionStatus = "requires_reload"
         end
     else
         self:RebuildVoiceRuntime()
@@ -314,14 +325,8 @@ function NS:InjectSavedEntry(entry)
     local resolver = self.Core and self.Core.ScopeResolver
     local targets = resolver and resolver:ResolveEntryTargets(entry) or {}
     local _, status, stats = self.Integrations.EllesmereUI:InjectEntryToTargets(entry, targets, EllesmereUIVEDB.settings.overwriteEUI == true)
-    entry.injectionStatus = status
-    entry.injectionStats = {
-        targetCount = tonumber(stats.targetCount) or 0, injected = tonumber(stats.injected) or 0,
-        upToDate = tonumber(stats.upToDate) or 0, waiting = tonumber(stats.waiting) or 0,
-        conflict = tonumber(stats.conflict) or 0, invalidSound = tonumber(stats.invalidSound) or 0,
-        unsupported = tonumber(stats.unsupported) or 0, reloadRequired = tonumber(stats.reloadRequired) or 0,
-    }
-    if entry.injectionStats.reloadRequired > 0 then self:NotifyReloadRequiredOnce() end
+    self:SetRuntimeInjectionStats(entry, stats)
+    if (tonumber(stats.reloadRequired) or 0) > 0 then self:NotifyReloadRequiredOnce() end
     return true, status, stats
 end
 
@@ -338,6 +343,7 @@ function NS:SyncSelectedEUIEntries()
     end
     local results, status, stats = self.Integrations.EllesmereUI:InjectAllTargets(entries, EllesmereUIVEDB.settings.overwriteEUI == true)
     self.lastEUISyncResults, self.lastEUISyncStatus, self.lastEUISyncStats = results, status, stats
+    if self.SavedListLayout and type(self.SavedListLayout.InvalidateCache) == "function" then self.SavedListLayout:InvalidateCache() end
     return results, status, stats
 end
 

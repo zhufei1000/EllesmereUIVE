@@ -380,6 +380,10 @@ function NS.OptionsState:ClearEditorFields(owner)
     local _, modeSound = api.GetModes()
 
     state.selectedKey = nil
+    state.editingEntryUID = nil
+    state.originalClassID = nil
+    state.originalSpecID = nil
+    state.originalIndex = nil
     state.spellId = 0
     state.objectType = OBJECT_TYPE_SPELL
     state.itemLoadMode = ITEM_LOAD_NONE

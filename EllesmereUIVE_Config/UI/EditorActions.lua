@@ -16,12 +16,13 @@ end
 local function FinishSave(owner, inject)
     local state = Pull(owner) or NS.AceOptions:GetState()
     state.injectOnSave = inject == true
-    local ok
+    local ok, result
     if state.entryType == "bloodlust" then
-        ok = NS.AceOptions:SaveBloodlustConfig()
+        ok, result = NS.AceOptions:SaveBloodlustConfig()
     else
-        ok = NS.AceOptions:SaveEntry()
+        ok, result = NS.AceOptions:SaveEntry()
     end
+    state.lastSaveResult = result
     state.injectOnSave = false
     if ok then
         if NS.UI.MainFrame and type(NS.UI.MainFrame.RequestRefresh) == "function" then

@@ -356,6 +356,68 @@ local function RemoveEntryKeyFromAllCollectionScopes(entryKey)
     end
 end
 
+local function RewriteEntryKeyReferences(oldKey, newKey, newClassID, newSpecID)
+    local db = EnsureRootDB()
+    local movedOut = false
+    for classIDKey, classMap in pairs(type(db.collectionData) == "table" and db.collectionData or {}) do
+        local scopeClassID = tonumber(classIDKey) or -1
+        for specIDKey, scope in pairs(type(classMap) == "table" and classMap or {}) do
+            local scopeSpecID = tonumber(specIDKey) or -1
+            if type(scope) == "table" then
+                local keepInScope = scopeClassID == tonumber(newClassID) and scopeSpecID == tonumber(newSpecID)
+                for i = #(scope.root or {}), 1, -1 do
+                    local item = scope.root[i]
+                    if type(item) == "table" and item.type == "entry" then
+                        local key = BuildEntryKey(scopeClassID, scopeSpecID, item.index)
+                        if key == oldKey then
+                            if keepInScope then
+                                local _, _, newIndex = ParseEntryKey(newKey)
+                                item.index = newIndex
+                            else
+                                table.remove(scope.root, i)
+                            end
+                        end
+                    end
+                end
+                for _, group in pairs(type(scope.groups) == "table" and scope.groups or {}) do
+                    if type(group) == "table" and type(group.entries) == "table" then
+                        for i = #group.entries, 1, -1 do
+                            local key = CollectionStore.EntryRefToKey
+                                and CollectionStore.EntryRefToKey(scopeClassID, scopeSpecID, group.entries[i]) or tostring(group.entries[i] or "")
+                            if key == oldKey then
+                                if keepInScope then group.entries[i] = newKey
+                                else table.remove(group.entries, i); movedOut = true end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    for _, list in pairs(type(db.savedListOrder) == "table" and db.savedListOrder or {}) do
+        if type(list) == "table" then
+            for i, key in ipairs(list) do
+                if tostring(key or "") == oldKey then list[i] = newKey end
+            end
+        end
+    end
+    return movedOut
+end
+
+local function NormalizeAllCollectionScopes(api)
+    local db = EnsureRootDB()
+    for classIDKey, classMap in pairs(type(db.collectionData) == "table" and db.collectionData or {}) do
+        local classID = tonumber(classIDKey)
+        for specIDKey, scope in pairs(type(classMap) == "table" and classMap or {}) do
+            local specID = tonumber(specIDKey)
+            if classID and specID and type(scope) == "table" then
+                NormalizeCollectionScope(scope, api.GetStoredEntryMap(classID, specID), classID, specID)
+            end
+        end
+    end
+end
+
 local function RequestNativeUIRefresh(reason)
     if NS.UI and NS.UI.MainFrame then
         if type(NS.UI.MainFrame.RequestRefresh) == "function" then
@@ -558,6 +620,28 @@ function EntryStore:GetEntryMap(owner)
     return api.GetStoredEntryMap(state.classID, state.specID)
 end
 
+function EntryStore:FindEntryByUID(entryUID)
+    local api = GetApi()
+    local uid = tostring(entryUID or "")
+    local db = rawget(_G, "EllesmereUIVEDB")
+    if not api or uid == "" or type(db) ~= "table" or type(db.specConfigs) ~= "table" then return nil end
+    for classIDKey, classMap in pairs(db.specConfigs) do
+        local classID = tonumber(classIDKey)
+        for specIDKey, map in pairs(type(classMap) == "table" and classMap or {}) do
+            local specID = tonumber(specIDKey)
+            if classID and specID and type(map) == "table" then
+                for index, entry in pairs(map) do
+                    local numericIndex = tonumber(index) or 0
+                    if numericIndex > 0 and type(entry) == "table" and tostring(entry.entryUID or "") == uid then
+                        return { classID = classID, specID = specID, index = numericIndex, map = map, entry = entry }
+                    end
+                end
+            end
+        end
+    end
+    return nil
+end
+
 function EntryStore:GetCurrentScopeEntryList(owner)
     local api = GetApi()
     local options = GetOptions(owner)
@@ -734,6 +818,10 @@ function EntryStore:LoadSelectedEntry(owner)
 
     state.classID = classID
     state.specID = specID
+    state.editingEntryUID = tostring(entry.entryUID or "")
+    state.originalClassID = classID
+    state.originalSpecID = specID
+    state.originalIndex = selectedIndex
     state.entryType = NormalizeEntryTypeValue(entry.entryType)
     state.euiTriggerType = tostring(entry.euiTriggerType or "cdReady")
     state.injectOnSave = false
@@ -885,20 +973,11 @@ function EntryStore:SaveEntry(owner)
     local options = GetOptions(owner)
     local state = type(options.GetState) == "function" and options:GetState() or {}
     if not api then
-        return
+        return false, "invalid_scope"
     end
 
     local classID = tonumber(state.classID) or 0
     local specID = tonumber(state.specID) or 0
-    local selectedCollectionKeyForSave = tostring(state.selectedCollectionKey or "")
-    if selectedCollectionKeyForSave == "" and tostring(state.selectedKey or ""):match("^group:") then
-        selectedCollectionKeyForSave = tostring(state.selectedKey or "")
-    end
-    local saveGroupClassID, saveGroupSpecID, saveGroupID = ParseGroupKey(selectedCollectionKeyForSave)
-    if saveGroupID ~= "" and saveGroupClassID >= 0 and saveGroupSpecID >= 0 then
-        classID = saveGroupClassID
-        specID = saveGroupSpecID
-    end
     if classID == ALL_CLASSES_ID then
         specID = ALL_SPECS_ID
         state.specID = ALL_SPECS_ID
@@ -1015,11 +1094,11 @@ function EntryStore:SaveEntry(owner)
     state.alertSpecIDs = alertSpecIDs
     if classID < 0 or specID < 0 then
         print("[EUIVE] " .. L("MSG_INVALID_CLASS_SPEC"))
-        return
+        return false, "invalid_scope"
     end
     if spellId <= 0 then
         print("[EUIVE] " .. L("MSG_INVALID_SPELL_ID"))
-        return
+        return false, "invalid_scope"
     end
     if isCooldownEntry then
         baseCD = 0
@@ -1032,7 +1111,7 @@ function EntryStore:SaveEntry(owner)
         voiceEnabled = true
         if soundSource == "tts" or notifyMode == modeTts then
             print("[EUIVE] " .. L("STATUS_unsupported_tts"))
-            return
+            return false, "invalid_sound"
         end
     end
     if (not isCooldownEntry) then
@@ -1048,15 +1127,15 @@ function EntryStore:SaveEntry(owner)
     end
     if isCastEntry and delayEnabled and delaySeconds <= 0 then
         print("[EUIVE] " .. L("MSG_INVALID_DELAY_SECONDS"))
-        return
+        return false, "invalid_scope"
     end
     if checkTalent and talentId <= 0 then
         print("[EUIVE] " .. L("MSG_NEED_TALENT_ID"))
-        return
+        return false, "invalid_scope"
     end
     if checkTalent and talentCD <= 0 then
         print("[EUIVE] " .. L("MSG_NEED_TALENT_CD"))
-        return
+        return false, "invalid_scope"
     end
     if checkTalent and talentName == "" and type(api.ResolveTalentName) == "function" then
         talentName = api.ResolveTalentName(talentId)
@@ -1064,22 +1143,30 @@ function EntryStore:SaveEntry(owner)
     end
     if not voiceEnabled and not imageEnabled and not textEnabled then
         print("[EUIVE] " .. L("MSG_NEED_ALERT_ACTIONS"))
-        return
+        return false, "invalid_scope"
     end
     if voiceEnabled and notifyMode == modeTts and TrimText(ttsText) == "" then
         print("[EUIVE] " .. L("MSG_NEED_TTS_TEXT"))
-        return
+        return false, "invalid_sound"
     end
-    if voiceEnabled and notifyMode == modeSound and TrimText(soundPath) == "" then
+    if voiceEnabled and notifyMode == modeSound
+        and ((soundSource == "sharedmedia" and sharedMediaSound == "")
+            or (soundSource ~= "sharedmedia" and TrimText(soundPath) == "")) then
         print("[EUIVE] " .. L("MSG_NEED_SOUND_PATH"))
-        return
+        return false, "invalid_sound"
     end
 
-    local map = api.EnsureEntryMap(classID, specID)
+    local selectedKeyIsEntry = tostring(state.selectedKey or ""):match("^%-?%d+:%-?%d+:%-?%d+$") ~= nil
+    local editingUID = selectedKeyIsEntry and tostring(state.editingEntryUID or "") or ""
+    local original = editingUID ~= "" and self:FindEntryByUID(editingUID) or nil
     local selectedClassID, selectedSpecID, selectedIndex = ParseEntryKey(state.selectedKey)
+    if original then
+        selectedClassID, selectedSpecID, selectedIndex = original.classID, original.specID, original.index
+    end
+    local map = api.GetStoredEntryMap(classID, specID)
     local targetIndex = 0
 
-    if selectedClassID == classID and selectedSpecID == specID and selectedIndex >= 1 and api.GetEntry(map, selectedIndex) then
+    if original and selectedClassID == classID and selectedSpecID == specID then
         targetIndex = selectedIndex
     else
         targetIndex = api.FindFirstFreeIndex(map) or 0
@@ -1090,8 +1177,10 @@ function EntryStore:SaveEntry(owner)
         local entry = api.GetEntry(map, index)
         local existingID = tonumber(entry and entry.spellId) or 0
         local existingType = api and type(api.ResolveObjectType) == "function" and api.ResolveObjectType(existingID, entry and entry.objectType) or tostring(entry and entry.objectType or OBJECT_TYPE_SPELL)
+        local candidateUID = tostring(entry and entry.entryUID or "")
         if entry
             and index ~= targetIndex
+            and not (editingUID ~= "" and candidateUID == editingUID)
             and (tonumber(entry.spellId) or 0) == spellId
             and NormalizeEntryTypeValue(entry.entryType) == entryType
             and (entryType ~= "euiVoice" or tostring(entry.euiTriggerType or "cdReady") == tostring(state.euiTriggerType or "cdReady"))
@@ -1099,20 +1188,16 @@ function EntryStore:SaveEntry(owner)
             and (objectType ~= OBJECT_TYPE_ITEM or ItemLoadModesOverlap(entry.itemLoadMode, itemLoadMode))
             and EntryAlertScopeOverlaps(entry, classID, specID, alertRaceIDs, alertClassIDs, alertSpecIDs) then
             print("[EUIVE] " .. L("MSG_DUP_SPELL"))
-            return
+            return false, "duplicate"
         end
     end
 
     if targetIndex <= 0 then
         print("[EUIVE] " .. L("MSG_SAVE_LIMIT"))
-        return
+        return false, "move_failed"
     end
 
-    local oldEntry = api.GetEntry(map, targetIndex)
-    if not oldEntry and selectedIndex >= 1 then
-        local selectedMap = api.GetStoredEntryMap(selectedClassID, selectedSpecID)
-        oldEntry = api.GetEntry(selectedMap, selectedIndex)
-    end
+    local oldEntry = original and original.entry or api.GetEntry(map, targetIndex)
     local savedEntry = {
         entryType = entryType,
         objectType = objectType,
@@ -1207,68 +1292,98 @@ function EntryStore:SaveEntry(owner)
     end
 
     savedEntry.entryUID = oldEntry and oldEntry.entryUID or (NS.Core and NS.Core.Database and NS.Core.Database:NextEntryUID())
+    savedEntry.entryUID = tostring(savedEntry.entryUID or "")
     savedEntry.classID, savedEntry.specID = classID, specID
     if NS.Core and NS.Core.Database and type(NS.Core.Database.NormalizeEUITarget) == "function" then
         NS.Core.Database:NormalizeEUITarget(savedEntry)
     end
-    local oldInjectionChanged = false
-    if oldEntry and oldEntry.entryType == "euiVoice" and NS.Integrations and NS.Integrations.EllesmereUI
-        and type(NS.EUIDefinitionChanged) == "function"
-        and NS.EUIDefinitionChanged(oldEntry, savedEntry, selectedClassID, selectedSpecID, classID, specID) then
-        local oldSnapshot = type(NS.SnapshotEntry) == "function" and NS.SnapshotEntry(oldEntry) or oldEntry
-        local removed, removeStatus, removalChanged = NS.Integrations.EllesmereUI:RemoveEntryFromAllRecordedScopes(oldSnapshot, true)
-        oldInjectionChanged = removalChanged == true
-        if not removed and removeStatus ~= "removed" and removeStatus ~= "waiting_combat" and type(NS.QueueEUIRemoval) == "function" then
-            NS:QueueEUIRemoval(oldSnapshot)
+    if isCooldownEntry then
+        local registry = NS.Core and NS.Core.EUISoundRegistry
+        local soundValue, soundStatus = registry and registry:RegisterEntry(savedEntry)
+        if not soundValue then
+            print("[EUIVE] " .. L("STATUS_" .. tostring(soundStatus or "invalid_path")))
+            return false, "invalid_sound"
         end
     end
-    ClearDeletedEntryMarker(classID, specID, savedEntry, targetIndex)
-    map[targetIndex] = savedEntry
+    local integration = NS.Integrations and NS.Integrations.EllesmereUI
+    local definitionChanged = oldEntry and oldEntry.entryType == "euiVoice" and integration
+        and type(NS.EUIDefinitionChanged) == "function"
+        and NS.EUIDefinitionChanged(oldEntry, savedEntry, selectedClassID, selectedSpecID, classID, specID)
+    local oldInjectionChanged = false
+    if definitionChanged then
+        local oldSnapshot = type(NS.SnapshotEntry) == "function" and NS.SnapshotEntry(oldEntry) or oldEntry
+        local removed, removeStatus, removalChanged = integration:RemoveEntryFromAllRecordedScopes(oldSnapshot, true)
+        oldInjectionChanged = removalChanged == true
+        if not removed and removeStatus ~= "removed" then
+            print("[EUIVE] " .. L("STATUS_" .. tostring(removeStatus or "move_failed")))
+            return false, "move_failed"
+        end
+    end
+
+    local oldKey = original and BuildEntryKey(original.classID, original.specID, original.index) or nil
+    local newKey = BuildEntryKey(classID, specID, targetIndex)
+    local scopeChanged = original and (original.classID ~= classID or original.specID ~= specID or original.index ~= targetIndex)
+    local db = EnsureRootDB()
+    local deepCopy = NS.Core and NS.Core.Database and NS.Core.Database.DeepCopy
+    local collectionBackup = deepCopy and deepCopy(db.collectionData) or nil
+    local orderBackup = deepCopy and deepCopy(db.savedListOrder) or nil
+    local targetMap = api.EnsureEntryMap(classID, specID)
+    local previousTarget = api.GetEntry(targetMap, targetIndex)
+    local movedOutOfCollection = false
+    local commitOK = pcall(function()
+        ClearDeletedEntryMarker(classID, specID, savedEntry, targetIndex)
+        targetMap[targetIndex] = savedEntry
+        if scopeChanged and oldKey then
+            movedOutOfCollection = RewriteEntryKeyReferences(oldKey, newKey, classID, specID)
+            original.map[original.index] = nil
+        end
+
+        local selectedCollectionKey = tostring(state.selectedCollectionKey or "")
+        if not original and selectedCollectionKey == "" and tostring(state.selectedKey or ""):match("^group:") then
+            selectedCollectionKey = tostring(state.selectedKey or "")
+        end
+        if not original and selectedCollectionKey ~= "" then
+            local groupClassID, groupSpecID, groupID = ParseGroupKey(selectedCollectionKey)
+            if groupID ~= "" and groupClassID == classID and groupSpecID == specID then
+                local scope = EnsureCollectionScope(classID, specID)
+                if scope and type(scope.groups[groupID]) == "table" then
+                    local group = scope.groups[groupID]
+                    group.entries = type(group.entries) == "table" and group.entries or {}
+                    group.entries[#group.entries + 1] = newKey
+                end
+            end
+        end
+        NormalizeAllCollectionScopes(api)
+    end)
+    if not commitOK then
+        targetMap[targetIndex] = previousTarget
+        if original then original.map[original.index] = oldEntry end
+        if collectionBackup then db.collectionData = collectionBackup end
+        if orderBackup then db.savedListOrder = orderBackup end
+        if definitionChanged and type(NS.InjectSavedEntry) == "function" then NS:InjectSavedEntry(oldEntry) end
+        print("[EUIVE] " .. L("MSG_SAVE_MOVE_FAILED"))
+        return false, "move_failed"
+    end
+
+    local saveResult = "saved"
     if isCooldownEntry then
         local registry = NS.Core and NS.Core.EUISoundRegistry
         if registry and type(registry.RegisterEntry) == "function" then registry:RegisterEntry(savedEntry) end
         if state.injectOnSave == true and type(NS.InjectSavedEntry) == "function" then
             local _, status, stats = NS:InjectSavedEntry(savedEntry)
-            savedEntry.injectionStatus = status
+            if type(stats) == "table" and ((tonumber(stats.injected) or 0) + (tonumber(stats.upToDate) or 0)) > 0
+                and (tonumber(stats.waiting) or 0) == 0 and (tonumber(stats.conflict) or 0) == 0
+                and (tonumber(stats.invalidSound) or 0) == 0 and (tonumber(stats.reloadRequired) or 0) == 0 then
+                saveResult = "saved_and_injected"
+            end
             if oldInjectionChanged and not (type(stats) == "table" and stats.refreshRequired == true) then
-                NS.Integrations.EllesmereUI:Refresh()
+                integration:Refresh()
             end
         else
-            savedEntry.injectionStatus = "saved_waiting_sync"
-            if oldInjectionChanged then NS.Integrations.EllesmereUI:Refresh() end
+            if oldInjectionChanged then integration:Refresh() end
         end
     elseif oldInjectionChanged then
-        NS.Integrations.EllesmereUI:Refresh()
-    end
-
-    if selectedIndex >= 1 and (selectedClassID ~= classID or selectedSpecID ~= specID or selectedIndex ~= targetIndex) then
-        local oldMap = api.GetStoredEntryMap(selectedClassID, selectedSpecID)
-        local oldSelectedEntry = api.GetEntry(oldMap, selectedIndex)
-        if oldSelectedEntry then
-            oldMap[selectedIndex] = nil
-            RemoveEntryKeyFromAllCollectionScopes(BuildEntryKey(selectedClassID, selectedSpecID, selectedIndex))
-        end
-    end
-
-    local selectedCollectionKey = tostring(state.selectedCollectionKey or "")
-    if selectedCollectionKey == "" and tostring(state.selectedKey or ""):match("^group:") then
-        selectedCollectionKey = tostring(state.selectedKey or "")
-    end
-    if selectedCollectionKey ~= "" then
-        local groupClassID, groupSpecID, groupID = ParseGroupKey(selectedCollectionKey)
-        if groupID ~= "" and groupClassID == classID and groupSpecID == specID then
-            local scope = EnsureCollectionScope(classID, specID)
-            if scope and type(scope.groups[groupID]) == "table" then
-                local entryKey = BuildEntryKey(classID, specID, targetIndex)
-                RemoveEntryKeyFromAllCollectionScopes(entryKey)
-                local group = scope.groups[groupID]
-                if type(group.entries) ~= "table" then
-                    group.entries = {}
-                end
-                group.entries[#group.entries + 1] = entryKey
-                NormalizeCollectionScope(scope, map, classID, specID)
-            end
-        end
+        integration:Refresh()
     end
 
     api.RebuildRuntimeConfig()
@@ -1282,11 +1397,15 @@ function EntryStore:SaveEntry(owner)
     api.RefreshRuntimeCooldowns()
     state.selectedKey = BuildEntryKey(classID, specID, targetIndex)
     self:LoadSelectedEntry(options)
+    if NS.SavedListLayout and type(NS.SavedListLayout.InvalidateCache) == "function" then NS.SavedListLayout:InvalidateCache() end
     if not RequestNativeUIRefresh("list") and type(api.RefreshPanel) == "function" then
         api.RefreshPanel()
     end
     print("[EUIVE] " .. L("MSG_CONFIG_SAVED"))
-    return true
+    if movedOutOfCollection then print("[EUIVE] " .. L("MSG_SCOPE_CHANGED_COLLECTION_REMOVED")) end
+    local currentStatus = integration and type(integration.GetInjectionStatus) == "function" and integration:GetInjectionStatus(savedEntry) or nil
+    if currentStatus then print("[EUIVE] " .. L("STATUS_" .. tostring(currentStatus))) end
+    return true, saveResult
 end
 
 function EntryStore:DeleteSelectedEntry(owner, suppressRefresh)

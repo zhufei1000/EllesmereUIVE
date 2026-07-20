@@ -1,4 +1,4 @@
-# EllesmereUIVE 1.0.3 Test Plan
+# EllesmereUIVE 1.0.4 Test Plan
 
 Use a clean copy of `!EllesmereUIVE_Bootstrap`, `EllesmereUIVE`, and `EllesmereUIVE_Config`. Keep the installed `EllesmereUI` and `EllesmereUICooldownManager` folders unchanged. Enable Lua error display before testing.
 
@@ -158,3 +158,10 @@ Repeat Hosted Buff, arbitrary Buff-bar, reload-required media, early Bootstrap, 
 4. Use Save and Inject on a multi-spec EUI voice and confirm every target `specProfile` receives the correct field while the current EUI UI refreshes once.
 5. Narrow the entry scope or delete it; confirm all matching injection records are removed while a field manually changed in EUI remains untouched.
 6. Search built-in sounds by display name, filename, and full path, and search LibSharedMedia sounds case-insensitively. Clearing search must restore the complete list without changing ordinary dropdowns.
+
+## 1.0.4 reload, SharedMedia, and scope-move regression
+
+1. Run `lua tests/reload_status.lua` and confirm transient batch state is removed and an old `requiresReload` record cannot override current readiness.
+2. Run `lua tests/sharedmedia_bootstrap.lua` and confirm `sm:Test Sound` is written for spell 207167 before the cooldown manager loads, even when its path appears later.
+3. Run `lua tests/eui_spell_playback_config.lua` and confirm 207167 reports `waiting_for_skill` until it appears in `barSpells.assignedSpells`, then reports `native_ready` with the correct `cdReadySoundKey`.
+4. Run `lua tests/edit_scope_move.lua` and confirm moving entry UID `00000207` from Death Knight/all specs to Unholy preserves the UID, removes safe old-scope injection, updates saved order, and moves the entry out of an incompatible group.
