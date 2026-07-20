@@ -65,6 +65,15 @@ local function CleanTransientEntryFields(entry)
     end
     entry.entryUID = tostring(entry.entryUID)
     entry.objectType = tostring(entry.objectType or "spell")
+    if entry.entryType == "euiVoice" and entry.objectType == "item" then
+        local itemID = tonumber(entry.itemID or entry.inputID or entry.spellId)
+        entry.itemID = itemID and itemID > 0 and math.floor(itemID) or nil
+        entry.triggerSpellID = nil
+        entry.triggerSpellId = nil
+        entry.triggerSpellName = nil
+        entry.resolvedSpellID = nil
+        entry.resolvedSpellName = nil
+    end
     entry.enabled = entry.enabled ~= false and entry.voiceEnabled ~= false
     entry.voiceEnabled = entry.enabled
     Database:NormalizeEUITarget(entry)

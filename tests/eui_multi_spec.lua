@@ -16,8 +16,8 @@ end
 EllesmereUIDB = {
     activeProfile = "Default",
     spellAssignments = { profiles = { Default = { specProfiles = {
-        ["62"] = SpecProfile({ 12345, 22222, 33333 }),
-        ["63"] = SpecProfile({ 12345, 22222, 33333 }),
+        ["62"] = SpecProfile({ 12345, 22222, 33333, -212454, -241308 }),
+        ["63"] = SpecProfile({ 12345, 22222, 33333, -212454, -241308 }),
     } } } },
     profiles = { Default = { addons = { EllesmereUICooldownManager = { customActiveStates = {} } } } },
 }
@@ -92,5 +92,55 @@ for _, specs in pairs(EllesmereUIVEDB.euiInjectionRecords) do
     end
 end
 assert(customRecordCount == 1)
+
+local itemEntry = {
+    entryUID = "item1", entryType = "euiVoice", objectType = "item",
+    spellId = 212454, itemID = 212454, resolvedSpellID = 99999,
+    euiTriggerType = "cdReady", soundSource = "builtin", soundPath = "Bell.ogg",
+    enabled = true, voiceEnabled = true,
+}
+local beforeItem = refreshCount
+local _, _, itemStats = integration:InjectEntryToTargets(itemEntry, targets, false)
+assert(itemStats.injected == 1 and itemStats.upToDate == 1)
+assert(customStates[-212454].cdReadySoundKey == "sm:EUIVE_item1")
+assert(customStates[99999] == nil)
+local itemRecord = EllesmereUIVEDB.euiInjectionRecords.Default["62"][212454].cdReady
+assert(itemRecord.objectType == "item")
+assert(itemRecord.itemID == 212454 and itemRecord.lookupID == -212454 and itemRecord.lookupType == "itemID")
+assert(itemRecord.spellID == nil and refreshCount == beforeItem + 1)
+assert(integration:GetInjectionStatus(itemEntry) == "item_id_injected")
+local itemIdentifier = integration:ResolveManagedIdentifier(itemEntry, 62)
+assert(itemIdentifier.itemID == 212454 and itemIdentifier.lookupID == -212454 and itemIdentifier.lookupType == "itemID")
+
+local missingItem = {
+    entryUID = "item2", entryType = "euiVoice", objectType = "item",
+    spellId = 999001, itemID = 999001, resolvedSpellID = 12345,
+    euiTriggerType = "cdReady", soundSource = "builtin", soundPath = "Bell.ogg",
+    enabled = true, voiceEnabled = true,
+}
+local _, _, missingStats = integration:InjectEntryToTargets(missingItem, targets, false)
+assert(missingStats.waiting == 2)
+assert(customStates[-999001] == nil and customStates[12345] == nil)
+
+local itemRemoved, itemRemoveStatus = integration:RemoveEntryFromAllRecordedScopes(itemEntry, true)
+assert(itemRemoved and itemRemoveStatus == "removed")
+assert(customStates[-212454].cdReadySoundKey == nil)
+
+-- EUI stores only the preset's primary itemID but monitors every altItemID.
+local qualityItem = {
+    entryUID = "item-quality", entryType = "euiVoice", objectType = "item",
+    spellId = 245898, itemID = 245898, euiTriggerType = "cdReady",
+    soundSource = "builtin", soundPath = "Bell.ogg", enabled = true, voiceEnabled = true,
+}
+local _, _, qualityStats = integration:InjectEntryToTargets(qualityItem, targets, false)
+assert(qualityStats.injected == 1 and qualityStats.upToDate == 1)
+assert(customStates[-241308].cdReadySoundKey == "sm:EUIVE_item-quality")
+assert(customStates[-245898] == nil)
+local qualityRecord = EllesmereUIVEDB.euiInjectionRecords.Default["62"][245898].cdReady
+assert(qualityRecord.itemID == 245898 and qualityRecord.euiItemID == 241308)
+assert(qualityRecord.lookupID == -241308 and qualityRecord.itemMatchType == "preset_group")
+local qualityIdentifier = integration:ResolveManagedIdentifier(qualityItem, 62)
+assert(qualityIdentifier.itemID == 245898 and qualityIdentifier.euiItemID == 241308)
+assert(qualityIdentifier.lookupID == -241308 and qualityIdentifier.itemMatchType == "preset_group")
 
 print("EUI_MULTI_SPEC_OK")

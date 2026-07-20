@@ -11,6 +11,20 @@ local FIELD_BY_TRIGGER = {
     buffLoss = "buffLostSoundKey",
 }
 local HOSTED_BUFF_MARKER_BASE = 2000000000
+-- Mirrors EllesmereUICooldownManager.CDM_ITEM_PRESETS. EUI persists only the
+-- primary itemID; every altItemID shares that primary frame/settings entry.
+local EUI_ITEM_PRESET_GROUPS = {
+    [241308] = { 245898, 245897, 241309 }, -- Light's Potential
+    [241288] = { 241289, 245902, 245903 }, -- Potion of Recklessness
+    [241304] = { 241305 },                 -- Silvermoon Health Potion
+    [241300] = { 245917, 245916, 241301 }, -- Lightfused Mana Potion
+    [241302] = { 241303 },                 -- Invisibility Potion
+}
+local EUI_ITEM_PRESET_PRIMARY = {}
+for primaryID, alternateIDs in pairs(EUI_ITEM_PRESET_GROUPS) do
+    EUI_ITEM_PRESET_PRIMARY[primaryID] = primaryID
+    for _, alternateID in ipairs(alternateIDs) do EUI_ITEM_PRESET_PRIMARY[alternateID] = primaryID end
+end
 
 local function EntryEnabled(entry)
     return type(entry) == "table" and entry.enabled ~= false and entry.voiceEnabled ~= false
@@ -58,6 +72,11 @@ local function ResolveRootProfile(create)
     local bucket = type(profiles) == "table" and profiles[profileKey] or nil
     local specProfiles = type(bucket) == "table" and bucket.specProfiles or nil
     local profile = type(root.profiles) == "table" and root.profiles[profileKey] or nil
+    if create and type(profile) == "table" then
+        profile.addons = type(profile.addons) == "table" and profile.addons or {}
+        profile.addons.EllesmereUICooldownManager = type(profile.addons.EllesmereUICooldownManager) == "table"
+            and profile.addons.EllesmereUICooldownManager or {}
+    end
     local cdmProfile = type(profile) == "table" and type(profile.addons) == "table"
         and profile.addons.EllesmereUICooldownManager or nil
     return root, profileKey, specProfiles, cdmProfile
@@ -95,6 +114,57 @@ local function DecodeManagedID(value)
     if not value then return nil end
     if value <= -HOSTED_BUFF_MARKER_BASE then return -value - HOSTED_BUFF_MARKER_BASE end
     return value > 0 and value or nil
+end
+
+local function GetCachedItemName(itemID)
+    local name = C_Item and C_Item.GetItemNameByID and C_Item.GetItemNameByID(itemID)
+    if not name then
+        local getItemInfo = rawget(_G, "GetItemInfo")
+        if type(getItemInfo) == "function" then name = getItemInfo(itemID) end
+    end
+    return type(name) == "string" and name:match("^%s*(.-)%s*$") or nil
+end
+
+local function FindManagedItem(context, itemID, entry)
+    itemID = tonumber(itemID)
+    if not itemID or itemID <= 0 then return nil end
+    itemID = math.floor(itemID)
+    local marker = -math.floor(itemID)
+    local managedItems = {}
+    for _, barData in pairs(type(context and context.specProfile) == "table"
+        and type(context.specProfile.barSpells) == "table" and context.specProfile.barSpells or {}) do
+        for _, rawID in ipairs(type(barData) == "table" and type(barData.assignedSpells) == "table"
+            and barData.assignedSpells or {}) do
+            rawID = tonumber(rawID)
+            if rawID == marker then return itemID, "exact" end
+            if rawID == -13 or rawID == -14 then
+                local equipped = GetInventoryItemID and GetInventoryItemID("player", -rawID)
+                if tonumber(equipped) == itemID then return itemID, "trinket" end
+            elseif rawID and rawID <= -100 and rawID > -HOSTED_BUFF_MARKER_BASE then
+                managedItems[-rawID] = true
+            end
+        end
+    end
+
+    local primaryID = EUI_ITEM_PRESET_PRIMARY[itemID]
+    if primaryID and managedItems[primaryID] then return primaryID, "preset_group" end
+
+    -- Optional forward-compatible fallback for future EUI preset ranks. This is
+    -- deliberately opt-in because arbitrary custom items may legitimately share
+    -- a localized name without belonging to one EUI preset.
+    if entry and entry.itemLoadSameName == true then
+        local inputName = GetCachedItemName(itemID) or tostring(entry.spellName or ""):match("^%s*(.-)%s*$")
+        if inputName and inputName ~= "" then
+            for managedID in pairs(managedItems) do
+                if GetCachedItemName(managedID) == inputName then return managedID, "same_name" end
+            end
+        end
+        if C_Item and C_Item.RequestLoadItemDataByID then
+            C_Item.RequestLoadItemDataByID(itemID)
+            for managedID in pairs(managedItems) do C_Item.RequestLoadItemDataByID(managedID) end
+        end
+    end
+    return nil
 end
 
 local function IsBuffBar(barData)
@@ -167,9 +237,56 @@ local function ResolveTargetFamily(context, entry, spellID)
     return "spellSettingsCD"
 end
 
-local function ResolveTarget(context, family, spellID, create)
+-- EUI stores cooldown/utility items as negative item IDs. The on-use spell ID
+-- is resolved by EUI only for cast edges; it is not the cooldown identity.
+local function ResolveManagedIdentifier(context, entry)
+    local objectType = tostring(entry and entry.objectType or "spell"):lower()
+    if objectType == "item" then
+        local itemID = tonumber(entry.itemID or entry.inputID or entry.spellId)
+        itemID = itemID and math.floor(itemID) or nil
+        if not itemID or itemID <= 0 then return nil, "invalid_item_id" end
+        if tostring(entry.euiTriggerType or "cdReady") ~= "cdReady" then
+            return nil, "unsupported_entry_type"
+        end
+        local euiItemID, itemMatchType = FindManagedItem(context, itemID, entry)
+        if not euiItemID then return nil, "waiting_for_item_target" end
+        return {
+            objectType = "item",
+            inputID = itemID,
+            itemID = itemID,
+            euiItemID = euiItemID,
+            itemMatchType = itemMatchType,
+            recordID = itemID,
+            lookupID = -euiItemID,
+            lookupType = "itemID",
+            family = "customActiveStates",
+        }
+    end
+
+    local spellID = tonumber(entry and entry.spellId)
+    spellID = spellID and math.floor(spellID) or nil
+    if not spellID or spellID <= 0 then return nil, "unsupported_entry_type" end
+    local family, familyStatus = ResolveTargetFamily(context, entry, spellID)
+    if not family then return nil, familyStatus end
+    return {
+        objectType = "spell",
+        inputID = spellID,
+        recordID = spellID,
+        lookupID = spellID,
+        lookupType = "spellID",
+        family = family,
+    }
+end
+
+local function ResolveTarget(context, family, spellID, create, createCustom)
     if family == "customActiveStates" then
         local target, key = FindCustomState(context, spellID)
+        if not target and create and createCustom and type(context.cdmProfile) == "table" then
+            context.cdmProfile.customActiveStates = type(context.cdmProfile.customActiveStates) == "table"
+                and context.cdmProfile.customActiveStates or {}
+            context.cdmProfile.customActiveStates[spellID] = {}
+            target, key = context.cdmProfile.customActiveStates[spellID], spellID
+        end
         if not target then return nil, nil, "waiting_for_eui_custom_state" end
         return target, key
     end
@@ -259,31 +376,39 @@ function Integration:RegisterEntrySound(entry) return NS.Core.EUISoundRegistry:R
 
 local function BuildPlan(self, context, entry, overwrite)
     if not EntryEnabled(entry) then return nil, "disabled" end
-    if tostring(entry.objectType or "spell") ~= "spell" then return nil, "unsupported_entry_type" end
-    local spellID = tonumber(entry.spellId)
     local trigger = tostring(entry.euiTriggerType or "cdReady")
     local field = FIELD_BY_TRIGGER[trigger]
-    if not spellID or spellID <= 0 or not field then return nil, "unsupported_entry_type" end
-    local family, familyStatus = ResolveTargetFamily(context, entry, spellID)
-    if not family then return nil, familyStatus end
+    if not field then return nil, "unsupported_entry_type" end
+    local identifier, identifierStatus = ResolveManagedIdentifier(context, entry)
+    if not identifier then return nil, identifierStatus end
+    local family, lookupID = identifier.family, identifier.lookupID
     if family == "customActiveStates" and trigger ~= "cdReady" then return nil, "unsupported_entry_type" end
     local injectedValue, registerStatus, mediaChanged = self:RegisterEntrySound(entry)
     if not injectedValue then return nil, registerStatus end
     local readiness = NS.Core.EUISoundRegistry:GetNativeReadiness(entry)
     if readiness == "invalid_path" or readiness == "sharedmedia_missing" then return nil, readiness end
-    local target, actualKey, targetStatus = ResolveTarget(context, family, spellID, false)
-    if targetStatus then return nil, targetStatus end
+    local target, actualKey, targetStatus = ResolveTarget(context, family, lookupID, false)
+    if targetStatus and identifier.objectType ~= "item" then return nil, targetStatus end
     local current = type(target) == "table" and rawget(target, field) or nil
-    local records = GetRecordTable(context.profileKey, context.specKey, spellID, false)
+    local records = GetRecordTable(context.profileKey, context.specKey, identifier.recordID, false)
     local record = records and records[trigger] or nil
     local owned = IsOwnedValue(current) or (type(record) == "table" and current == record.injectedValue)
     if not IsEmpty(current) and current ~= injectedValue and not owned and overwrite ~= true then return nil, "conflict" end
-    local status = (not IsSkillPresent(context, spellID)) and "waiting_for_skill"
+    local status = (identifier.objectType == "spell" and not IsSkillPresent(context, lookupID)) and "waiting_for_skill"
         or readiness == "requires_reload" and "requires_reload"
+        or (identifier.objectType == "item" and "item_id_injected")
         or (family == "customActiveStates" and "custom_state_injected" or "native_ready")
     return {
         entry = entry,
-        spellID = spellID,
+        spellID = lookupID,
+        recordID = identifier.recordID,
+        objectType = identifier.objectType,
+        inputID = identifier.inputID,
+        itemID = identifier.itemID,
+        euiItemID = identifier.euiItemID,
+        itemMatchType = identifier.itemMatchType,
+        lookupID = lookupID,
+        lookupType = identifier.lookupType,
         trigger = trigger,
         field = field,
         family = family,
@@ -304,7 +429,7 @@ local function ResolveCurrentRecordTarget(context, record, spellID)
     if record.family == "customActiveStates" then
         local states = type(context.cdmProfile) == "table" and context.cdmProfile.customActiveStates or nil
         if type(states) ~= "table" then return nil end
-        local key = record.customStateKey
+        local key = record.customStateKey or record.lookupID
         return type(states[key]) == "table" and states[key]
             or (type(states[spellID]) == "table" and states[spellID])
             or (type(states[tostring(spellID)]) == "table" and states[tostring(spellID)]) or nil
@@ -314,7 +439,9 @@ local function ResolveCurrentRecordTarget(context, record, spellID)
 end
 
 local function ApplyPlan(context, plan)
-    local target, actualKey, targetStatus = ResolveTarget(context, plan.family, plan.spellID, true)
+    local target, actualKey, targetStatus = ResolveTarget(
+        context, plan.family, plan.lookupID, true, plan.objectType == "item"
+    )
     if type(target) ~= "table" then return false, targetStatus or "unsupported_structure" end
     local sameRecordedTarget = type(plan.record) == "table" and plan.record.family == plan.family
         and plan.record.field == plan.field
@@ -322,7 +449,7 @@ local function ApplyPlan(context, plan)
             or plan.record.customStateKey == actualKey)
     local staleChanged = false
     if type(plan.record) == "table" and not sameRecordedTarget then
-        local oldTarget = ResolveCurrentRecordTarget(context, plan.record, plan.spellID)
+        local oldTarget = ResolveCurrentRecordTarget(context, plan.record, plan.recordID)
         if type(oldTarget) == "table" and oldTarget[plan.record.field] == plan.record.injectedValue then
             oldTarget[plan.record.field] = plan.record.previousValue
             staleChanged = true
@@ -333,12 +460,19 @@ local function ApplyPlan(context, plan)
         previousValue = plan.current
     end
     if plan.fieldChanged then target[plan.field] = plan.injectedValue end
-    local records = GetRecordTable(context.profileKey, context.specKey, plan.spellID, true)
+    local records = GetRecordTable(context.profileKey, context.specKey, plan.recordID, true)
     records[plan.trigger] = {
         entryUID = tostring(plan.entry.entryUID or ""),
         profileKey = context.profileKey,
         specKey = context.specKey,
-        spellID = plan.spellID,
+        spellID = plan.objectType == "spell" and plan.lookupID or nil,
+        objectType = plan.objectType,
+        inputID = plan.inputID,
+        itemID = plan.itemID,
+        euiItemID = plan.euiItemID,
+        itemMatchType = plan.itemMatchType,
+        lookupID = plan.lookupID,
+        lookupType = plan.lookupType,
         triggerType = plan.trigger,
         soundPath = plan.resolvedPath,
         soundKey = plan.injectedValue,
@@ -360,14 +494,14 @@ local function NewStats()
 end
 
 local function CountStatus(stats, status)
-    if status == "native_ready" or status == "preseeded" or status == "custom_state_injected" then stats.injected = stats.injected + 1
+    if status == "native_ready" or status == "preseeded" or status == "custom_state_injected" or status == "item_id_injected" then stats.injected = stats.injected + 1
     elseif status == "up_to_date" then stats.upToDate = stats.upToDate + 1
-    elseif status == "waiting_for_eui" or status == "eui_missing" or status == "module_not_loaded" or status == "waiting_for_spec" or status == "waiting_for_eui_custom_state" or status == "waiting_for_skill"
+    elseif status == "waiting_for_eui" or status == "eui_missing" or status == "module_not_loaded" or status == "waiting_for_spec" or status == "waiting_for_eui_custom_state" or status == "waiting_for_skill" or status == "waiting_for_item_target"
         or status == "waiting_combat" or status == "saved_waiting_sync" then stats.waiting = stats.waiting + 1
     elseif status == "requires_reload" then stats.reloadRequired = stats.reloadRequired + 1
     elseif status == "conflict" then stats.conflict = stats.conflict + 1
     elseif status == "invalid_path" or status == "sharedmedia_missing" then stats.invalidSound = stats.invalidSound + 1
-    elseif status == "unsupported_entry_type" or status == "unsupported_structure" then stats.unsupported = stats.unsupported + 1
+    elseif status == "unsupported_entry_type" or status == "unsupported_structure" or status == "invalid_item_id" then stats.unsupported = stats.unsupported + 1
     elseif status == "disabled" then stats.disabled = stats.disabled + 1 end
 end
 
@@ -422,7 +556,7 @@ function Integration:InjectEntryToTargets(entry, targets, overwrite, noRefresh)
             status = planStatus or "pending"
             if plan then
                 if not plan.fieldChanged and not plan.mediaChanged then status = "up_to_date" end
-                local customKey = plan.family == "customActiveStates" and table.concat({ context.profileKey, plan.spellID, plan.trigger }, ":") or nil
+                local customKey = plan.family == "customActiveStates" and table.concat({ context.profileKey, plan.lookupID, plan.trigger }, ":") or nil
                 if customKey and seenCustom[customKey] then
                     status = "up_to_date"
                 else
@@ -517,7 +651,7 @@ local function ResolveRecordedTarget(root, profileKey, specKey, spellID, record)
         local profile = type(root.profiles) == "table" and root.profiles[profileKey] or nil
         local cdm = type(profile) == "table" and type(profile.addons) == "table" and profile.addons.EllesmereUICooldownManager or nil
         local states = type(cdm) == "table" and cdm.customActiveStates or nil
-        local key = record.customStateKey
+        local key = record.customStateKey or record.lookupID
         return type(states) == "table" and (states[key] or states[spellID] or states[tostring(spellID)]) or nil
     end
     local assignments = root.spellAssignments
@@ -592,19 +726,21 @@ function Integration:GetInjectionStatus(entry)
     if readiness == "invalid_path" or readiness == "sharedmedia_missing" then return readiness end
     local context, status = ResolveContext(false)
     if not context then return status end
-    local spellID = tonumber(entry.spellId)
     local trigger = tostring(entry.euiTriggerType or "cdReady")
     local field = FIELD_BY_TRIGGER[trigger]
-    local family, familyStatus = ResolveTargetFamily(context, entry, spellID)
-    if not family then return familyStatus end
-    local target, _, targetStatus = ResolveTarget(context, family, spellID, false)
+    if not field then return "unsupported_entry_type" end
+    local identifier, identifierStatus = ResolveManagedIdentifier(context, entry)
+    if not identifier then return identifierStatus end
+    local family, lookupID = identifier.family, identifier.lookupID
+    local target, _, targetStatus = ResolveTarget(context, family, lookupID, false)
     if targetStatus then return targetStatus end
     local value = type(target) == "table" and target[field] or nil
-    local records = GetRecordTable(context.profileKey, context.specKey, spellID, false)
+    local records = GetRecordTable(context.profileKey, context.specKey, identifier.recordID, false)
     local record = records and records[trigger] or nil
     if type(record) == "table" and value == record.injectedValue then
-        if not IsSkillPresent(context, spellID) then return "waiting_for_skill" end
+        if identifier.objectType == "spell" and not IsSkillPresent(context, lookupID) then return "waiting_for_skill" end
         if readiness == "requires_reload" or record.requiresReload == true then return "requires_reload" end
+        if identifier.objectType == "item" then return "item_id_injected" end
         return family == "customActiveStates" and "custom_state_injected" or "native_ready"
     end
     if not IsEmpty(value) and not IsOwnedValue(value) then return "conflict" end
@@ -631,14 +767,19 @@ Integration.GetEntryStatus = Integration.GetInjectionStatus
 function Integration:FindManagedTarget(spellID, trigger, entry)
     local context, status = ResolveContext(false)
     if not context then return nil, status end
-    entry = entry or { euiTriggerType = trigger or "cdReady" }
-    local family, familyStatus = ResolveTargetFamily(context, entry, tonumber(spellID))
-    if not family then return nil, familyStatus end
-    local target, _, targetStatus = ResolveTarget(context, family, tonumber(spellID), false)
+    entry = entry or { spellId = spellID, euiTriggerType = trigger or "cdReady" }
+    local identifier, identifierStatus = ResolveManagedIdentifier(context, entry)
+    if not identifier then return nil, identifierStatus end
+    local target, _, targetStatus = ResolveTarget(context, identifier.family, identifier.lookupID, false)
     if targetStatus then return nil, targetStatus end
-    return target, family
+    return target, identifier.family
 end
 
 Integration.ResolveFamily = ResolveTargetFamily
+function Integration:ResolveManagedIdentifier(entry, specID)
+    local context, status = specID and ResolveContextForSpec(specID, false) or ResolveContext(false)
+    if not context then return nil, status end
+    return ResolveManagedIdentifier(context, entry)
+end
 function Integration:ResolveRootProfile(create) return ResolveRootProfile(create) end
 function Integration:ResolveContextForSpec(specID, create) return ResolveContextForSpec(specID, create) end
