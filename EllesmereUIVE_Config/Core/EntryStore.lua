@@ -1109,6 +1109,10 @@ function EntryStore:SaveEntry(owner)
     end
 
     local oldEntry = api.GetEntry(map, targetIndex)
+    if not oldEntry and selectedIndex >= 1 then
+        local selectedMap = api.GetStoredEntryMap(selectedClassID, selectedSpecID)
+        oldEntry = api.GetEntry(selectedMap, selectedIndex)
+    end
     local savedEntry = {
         entryType = entryType,
         objectType = objectType,
@@ -1206,10 +1210,13 @@ function EntryStore:SaveEntry(owner)
     if NS.Core and NS.Core.Database and type(NS.Core.Database.NormalizeEUITarget) == "function" then
         NS.Core.Database:NormalizeEUITarget(savedEntry)
     end
-    if isCooldownEntry and state.injectOnSave == true and oldEntry and oldEntry.entryType == "euiVoice"
-        and NS.Integrations and NS.Integrations.EllesmereUI then
+    local oldInjectionChanged = false
+    if oldEntry and oldEntry.entryType == "euiVoice" and NS.Integrations and NS.Integrations.EllesmereUI
+        and type(NS.EUIDefinitionChanged) == "function"
+        and NS.EUIDefinitionChanged(oldEntry, savedEntry, selectedClassID, selectedSpecID, classID, specID) then
         local oldSnapshot = type(NS.SnapshotEntry) == "function" and NS.SnapshotEntry(oldEntry) or oldEntry
-        local removed, removeStatus = NS.Integrations.EllesmereUI:RemoveEntry(oldSnapshot, true)
+        local removed, removeStatus, removalChanged = NS.Integrations.EllesmereUI:RemoveEntryFromAllRecordedScopes(oldSnapshot, true)
+        oldInjectionChanged = removalChanged == true
         if not removed and removeStatus ~= "removed" and removeStatus ~= "waiting_combat" and type(NS.QueueEUIRemoval) == "function" then
             NS:QueueEUIRemoval(oldSnapshot)
         end
@@ -1220,17 +1227,23 @@ function EntryStore:SaveEntry(owner)
         local registry = NS.Core and NS.Core.EUISoundRegistry
         if registry and type(registry.RegisterEntry) == "function" then registry:RegisterEntry(savedEntry) end
         if state.injectOnSave == true and type(NS.InjectSavedEntry) == "function" then
-            local _, status = NS:InjectSavedEntry(savedEntry)
+            local _, status, stats = NS:InjectSavedEntry(savedEntry)
             savedEntry.injectionStatus = status
+            if oldInjectionChanged and not (type(stats) == "table" and stats.refreshRequired == true) then
+                NS.Integrations.EllesmereUI:Refresh()
+            end
         else
             savedEntry.injectionStatus = "saved_waiting_sync"
+            if oldInjectionChanged then NS.Integrations.EllesmereUI:Refresh() end
         end
+    elseif oldInjectionChanged then
+        NS.Integrations.EllesmereUI:Refresh()
     end
 
     if selectedIndex >= 1 and (selectedClassID ~= classID or selectedSpecID ~= specID or selectedIndex ~= targetIndex) then
         local oldMap = api.GetStoredEntryMap(selectedClassID, selectedSpecID)
         local oldSelectedEntry = api.GetEntry(oldMap, selectedIndex)
-        if oldSelectedEntry and NormalizeEntryTypeValue(oldSelectedEntry.entryType) == entryType then
+        if oldSelectedEntry then
             oldMap[selectedIndex] = nil
             RemoveEntryKeyFromAllCollectionScopes(BuildEntryKey(selectedClassID, selectedSpecID, selectedIndex))
         end
@@ -1302,7 +1315,7 @@ function EntryStore:DeleteSelectedEntry(owner, suppressRefresh)
 
     if deletedEntry and deletedEntry.entryType == "euiVoice" and NS.Integrations and NS.Integrations.EllesmereUI then
         local snapshot = type(NS.SnapshotEntry) == "function" and NS.SnapshotEntry(deletedEntry) or deletedEntry
-        local removed, status = NS.Integrations.EllesmereUI:RemoveEntry(snapshot)
+        local removed, status = NS.Integrations.EllesmereUI:RemoveEntryFromAllRecordedScopes(snapshot)
         if not removed and status ~= "removed" and status ~= "waiting_combat" and type(NS.QueueEUIRemoval) == "function" then
             NS:QueueEUIRemoval(snapshot)
         end

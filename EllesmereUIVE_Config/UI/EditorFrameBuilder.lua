@@ -85,11 +85,9 @@ function Builder:EnsureFrame(owner)
     frame.contentHost = content
 
     local scopeSection = Section(content, L("SECTION_CLASS_SPEC"), 0, 0, 820, 104)
-    local classLabel, classDrop = Drop(scopeSection, "EllesmereUIVEEditorClassDropDown", L("LABEL_CLASS"), 16, -36, 230)
-    local specLabel, specDrop = Drop(scopeSection, "EllesmereUIVEEditorSpecDropDown", L("LABEL_SPEC"), 264, -36, 230)
     local scopeButton = Widgets:CreateButton(scopeSection, L("SECTION_CLASS_SPEC"), 150, 28)
-    scopeButton:SetPoint("TOPLEFT", scopeSection, "TOPLEFT", 516, -55)
-    local scopeSummary = Label(scopeSection, "", 16, -84, 780)
+    scopeButton:SetPoint("TOPLEFT", scopeSection, "TOPLEFT", 16, -48)
+    local scopeSummary = Label(scopeSection, "", 188, -54, 610)
 
     local spellSection = Section(content, L("SECTION_SPELL_PARAMS"), 0, -116, 820, 142)
     local spellIdLabel, spellId = Edit(spellSection, L("LABEL_SPELL_ID"), 16, -38, 180, true)
@@ -100,6 +98,8 @@ function Builder:EnsureFrame(owner)
     local sourceLabel, soundSourceDrop = Drop(notifySection, "EllesmereUIVEEditorSoundSourceDropDown", L("SOUND_SOURCE"), 16, -38, 220)
     local builtinLabel, builtinDrop = Drop(notifySection, "EllesmereUIVEEditorBuiltinDropDown", L("LABEL_BUILTIN_SOUND"), 254, -38, 528)
     local sharedMediaLabel, sharedMediaDrop = Drop(notifySection, "EllesmereUIVEEditorSharedMediaDropDown", "LibSharedMedia", 254, -38, 528)
+    Widgets:SetDropdownSearchable(builtinDrop, true, L("SEARCH_SOUNDS_PLACEHOLDER"))
+    Widgets:SetDropdownSearchable(sharedMediaDrop, true, L("SEARCH_SOUNDS_PLACEHOLDER"))
     local customPathLabel, customPath = Edit(notifySection, L("LABEL_CUSTOM_SOUND_PATH"), 254, -38, 528, false)
     local ttsLabel, ttsText = Edit(notifySection, L("LABEL_TTS_TEXT"), 254, -38, 390, false)
     local ttsRateLabel, ttsRate = Edit(notifySection, L("LABEL_TTS_RATE"), 662, -38, 120, true)
@@ -135,8 +135,7 @@ function Builder:EnsureFrame(owner)
 
     frame.widgets = {
         tabEUI = tabEUI, tabCast = tabCast, tabBloodlust = tabBloodlust,
-        close = close, scopeSection = scopeSection, classLabel = classLabel, classDrop = classDrop,
-        specLabel = specLabel, specDrop = specDrop, scopeButton = scopeButton, scopeSummary = scopeSummary,
+        close = close, scopeSection = scopeSection, scopeButton = scopeButton, scopeSummary = scopeSummary,
         spellSection = spellSection, spellIdLabel = spellIdLabel, spellId = spellId,
         spellNameLabel = spellNameLabel, spellName = spellName,
         euiTriggerLabel = euiTriggerLabel, euiTriggerDrop = euiTriggerDrop,

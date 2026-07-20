@@ -39,14 +39,12 @@ local function GetSpecKey()
     return id and tostring(id) or nil
 end
 
-local function ResolveContext(create)
+local function ResolveRootProfile(create)
     if not AddOnLoaded("EllesmereUI") then return nil, "waiting_for_eui" end
     if not AddOnLoaded("EllesmereUICooldownManager") and not TryLoadCooldownManager() then return nil, "module_not_loaded" end
     local root = rawget(_G, "EllesmereUIDB")
     if type(root) ~= "table" then return nil, "waiting_for_eui" end
     local profileKey = tostring(root.activeProfile or "Default")
-    local specKey = GetSpecKey()
-    if not specKey then return nil, "waiting_for_spec" end
     if create then
         root.spellAssignments = type(root.spellAssignments) == "table" and root.spellAssignments or {}
         root.spellAssignments.profiles = type(root.spellAssignments.profiles) == "table" and root.spellAssignments.profiles or {}
@@ -54,25 +52,42 @@ local function ResolveContext(create)
             and root.spellAssignments.profiles[profileKey] or {}
         local bucket = root.spellAssignments.profiles[profileKey]
         bucket.specProfiles = type(bucket.specProfiles) == "table" and bucket.specProfiles or {}
-        bucket.specProfiles[specKey] = type(bucket.specProfiles[specKey]) == "table" and bucket.specProfiles[specKey] or { barSpells = {} }
     end
     local assignments = root.spellAssignments
     local profiles = type(assignments) == "table" and assignments.profiles or nil
     local bucket = type(profiles) == "table" and profiles[profileKey] or nil
     local specProfiles = type(bucket) == "table" and bucket.specProfiles or nil
-    local specProfile = type(specProfiles) == "table" and (specProfiles[specKey] or specProfiles[tonumber(specKey)]) or nil
-    if create and type(specProfile) ~= "table" then return nil, "unsupported_structure" end
     local profile = type(root.profiles) == "table" and root.profiles[profileKey] or nil
     local cdmProfile = type(profile) == "table" and type(profile.addons) == "table"
         and profile.addons.EllesmereUICooldownManager or nil
+    return root, profileKey, specProfiles, cdmProfile
+end
+
+local function ResolveContextForSpec(specID, create)
+    local root, profileKey, specProfiles, cdmProfileOrStatus = ResolveRootProfile(create)
+    if not root then return nil, profileKey end
+    local specKey = tonumber(specID) and tostring(math.floor(tonumber(specID))) or tostring(specID or "")
+    if specKey == "" then return nil, "waiting_for_spec" end
+    if create then
+        specProfiles[specKey] = type(specProfiles[specKey]) == "table" and specProfiles[specKey] or { barSpells = {} }
+        specProfiles[specKey].barSpells = type(specProfiles[specKey].barSpells) == "table" and specProfiles[specKey].barSpells or {}
+    end
+    local specProfile = type(specProfiles) == "table" and (specProfiles[specKey] or specProfiles[tonumber(specKey)]) or nil
+    if create and type(specProfile) ~= "table" then return nil, "unsupported_structure" end
     return {
         root = root,
         profileKey = profileKey,
         specKey = specKey,
         specProfiles = specProfiles,
         specProfile = specProfile,
-        cdmProfile = cdmProfile,
+        cdmProfile = cdmProfileOrStatus,
     }
+end
+
+local function ResolveContext(create)
+    local specKey = GetSpecKey()
+    if not specKey then return nil, "waiting_for_spec" end
+    return ResolveContextForSpec(specKey, create)
 end
 
 local function DecodeManagedID(value)
@@ -329,7 +344,7 @@ local function ApplyPlan(context, plan)
         soundKey = plan.injectedValue,
         previousValue = previousValue,
         injectedValue = plan.injectedValue,
-        injectedAtVersion = NS.VERSION or "1.0.2",
+        injectedAtVersion = NS.VERSION or "1.0.3",
         family = plan.family,
         field = plan.field,
         customStateKey = plan.family == "customActiveStates" and (actualKey or plan.actualKey) or nil,
@@ -341,18 +356,18 @@ local function ApplyPlan(context, plan)
 end
 
 local function NewStats()
-    return { injected = 0, upToDate = 0, waiting = 0, conflict = 0, invalidSound = 0, unsupported = 0, disabled = 0, reloadRequired = 0, changed = false }
+    return { targetCount = 0, injected = 0, upToDate = 0, waiting = 0, conflict = 0, invalidSound = 0, unsupported = 0, disabled = 0, reloadRequired = 0, changed = false }
 end
 
 local function CountStatus(stats, status)
     if status == "native_ready" or status == "preseeded" or status == "custom_state_injected" then stats.injected = stats.injected + 1
     elseif status == "up_to_date" then stats.upToDate = stats.upToDate + 1
-    elseif status == "waiting_for_eui" or status == "waiting_for_spec" or status == "waiting_for_eui_custom_state" or status == "waiting_for_skill"
+    elseif status == "waiting_for_eui" or status == "eui_missing" or status == "module_not_loaded" or status == "waiting_for_spec" or status == "waiting_for_eui_custom_state" or status == "waiting_for_skill"
         or status == "waiting_combat" or status == "saved_waiting_sync" then stats.waiting = stats.waiting + 1
     elseif status == "requires_reload" then stats.reloadRequired = stats.reloadRequired + 1
     elseif status == "conflict" then stats.conflict = stats.conflict + 1
     elseif status == "invalid_path" or status == "sharedmedia_missing" then stats.invalidSound = stats.invalidSound + 1
-    elseif status == "unsupported_entry_type" then stats.unsupported = stats.unsupported + 1
+    elseif status == "unsupported_entry_type" or status == "unsupported_structure" then stats.unsupported = stats.unsupported + 1
     elseif status == "disabled" then stats.disabled = stats.disabled + 1 end
 end
 
@@ -363,22 +378,100 @@ function Integration:PreseedDatabaseEntry(entry, classID, specID)
 end
 
 function Integration:InjectEntry(entry, overwrite, noRefresh)
+    local classID, specID = 0, tonumber(GetSpecKey())
+    if type(NS.GetCurrentClassSpec) == "function" then classID, specID = NS:GetCurrentClassSpec() end
+    return self:InjectEntryToSpec(entry, classID, specID, overwrite, noRefresh)
+end
+
+function Integration:InjectEntryToSpec(entry, classID, specID, overwrite, noRefresh)
     if InCombatLockdown and InCombatLockdown() then
         if NS.RequestEUISync then NS:RequestEUISync("COMBAT_SAVE") end
         return false, "waiting_combat", false
     end
     local ok, result, status, changed = pcall(function()
-        local context, contextStatus = ResolveContext(true)
+        local context, contextStatus = ResolveContextForSpec(specID, true)
         if not context then return false, contextStatus, false end
         local plan, planStatus = BuildPlan(self, context, entry, overwrite)
         if not plan then return false, planStatus, false end
         local applied, applyStatus = ApplyPlan(context, plan)
         if applyStatus then return false, applyStatus, false end
-        if applied and not plan.requiresReload and not noRefresh then self:Refresh() end
+        local currentSpecKey = GetSpecKey()
+        if applied and not plan.requiresReload and not noRefresh and tostring(context.specKey) == tostring(currentSpecKey) then self:Refresh() end
         return true, planStatus, applied
     end)
     if not ok then return false, "unsupported_structure", false end
     return result, status or (result and "native_ready" or "pending"), changed == true
+end
+
+function Integration:InjectEntryToTargets(entry, targets, overwrite, noRefresh)
+    targets = type(targets) == "table" and targets or {}
+    local stats, results = NewStats(), {}
+    stats.targetCount = #targets
+    if InCombatLockdown and InCombatLockdown() then
+        stats.waiting = #targets
+        return results, "waiting_combat", stats
+    end
+    local currentSpecKey = GetSpecKey()
+    local refreshRequired, seenCustom = false, {}
+    for _, target in ipairs(targets) do
+        local specID = tonumber(target and target.specID)
+        local context, contextStatus = ResolveContextForSpec(specID, true)
+        local status, applied = contextStatus or "pending", false
+        if context then
+            local plan, planStatus = BuildPlan(self, context, entry, overwrite)
+            status = planStatus or "pending"
+            if plan then
+                if not plan.fieldChanged and not plan.mediaChanged then status = "up_to_date" end
+                local customKey = plan.family == "customActiveStates" and table.concat({ context.profileKey, plan.spellID, plan.trigger }, ":") or nil
+                if customKey and seenCustom[customKey] then
+                    status = "up_to_date"
+                else
+                    if customKey then seenCustom[customKey] = true end
+                    local applyStatus
+                    applied, applyStatus = ApplyPlan(context, plan)
+                    if applyStatus then status = applyStatus end
+                    if applied and not plan.requiresReload and (plan.family == "customActiveStates" or tostring(context.specKey) == tostring(currentSpecKey)) then
+                        refreshRequired = true
+                    end
+                end
+            end
+        end
+        results[specID or tostring(#results + 1)] = status
+        CountStatus(stats, status)
+        stats.changed = applied or stats.changed
+    end
+    if refreshRequired and not noRefresh then self:Refresh() end
+    stats.refreshRequired = refreshRequired
+    return results, "batch_complete", stats
+end
+
+function Integration:InjectAllTargets(entries, overwrite)
+    entries = type(entries) == "table" and entries or {}
+    local total, output, refreshRequired = NewStats(), {}
+    local resolver = NS.Core and NS.Core.ScopeResolver
+    for _, entry in ipairs(entries) do
+        local targets = resolver and resolver:ResolveEntryTargets(entry) or {}
+        local _, status, stats = self:InjectEntryToTargets(entry, targets, overwrite, true)
+        output[entry] = status
+        entry.injectionStatus = status
+        entry.injectionStats = {
+            targetCount = tonumber(stats.targetCount) or 0,
+            injected = tonumber(stats.injected) or 0,
+            upToDate = tonumber(stats.upToDate) or 0,
+            waiting = tonumber(stats.waiting) or 0,
+            conflict = tonumber(stats.conflict) or 0,
+            invalidSound = tonumber(stats.invalidSound) or 0,
+            unsupported = tonumber(stats.unsupported) or 0,
+            reloadRequired = tonumber(stats.reloadRequired) or 0,
+        }
+        for _, key in ipairs({ "targetCount", "injected", "upToDate", "waiting", "conflict", "invalidSound", "unsupported", "disabled", "reloadRequired" }) do
+            total[key] = (tonumber(total[key]) or 0) + (tonumber(stats[key]) or 0)
+        end
+        total.changed = stats.changed == true or total.changed
+        refreshRequired = stats.refreshRequired == true or refreshRequired
+    end
+    if refreshRequired then self:Refresh() end
+    return output, "complete", total
 end
 
 function Integration:InjectAll(entries, overwrite)
@@ -436,9 +529,9 @@ local function ResolveRecordedTarget(root, profileKey, specKey, spellID, record)
     return type(store) == "table" and (store[spellID] or store[tostring(spellID)]) or nil
 end
 
-function Integration:RemoveEntry(entry, noRefresh)
+function Integration:RemoveEntryFromAllRecordedScopes(entryOrUID, noRefresh)
     if InCombatLockdown and InCombatLockdown() then
-        if NS.QueueEUIRemoval then NS:QueueEUIRemoval(entry) end
+        if type(entryOrUID) == "table" and NS.QueueEUIRemoval then NS:QueueEUIRemoval(entryOrUID) end
         return false, "waiting_combat", false
     end
     local ok, removed, status, changed = pcall(function()
@@ -446,24 +539,22 @@ function Integration:RemoveEntry(entry, noRefresh)
         if type(root) ~= "table" then return false, "waiting_for_eui", false end
         local db = rawget(_G, "EllesmereUIVEDB")
         local rootRecords = type(db) == "table" and db.euiInjectionRecords or nil
-        local entryUID = tostring(entry and entry.entryUID or "")
-        local spellID = tonumber(entry and entry.spellId)
-        local trigger = tostring(entry and entry.euiTriggerType or "cdReady")
+        local entryUID = tostring(type(entryOrUID) == "table" and entryOrUID.entryUID or entryOrUID or "")
+        if entryUID == "" then return false, "removed", false end
         local currentProfile, currentSpec = self:GetCurrentProfileKey(), self:GetCurrentSpecKey()
         local found, currentChanged = false, false
         for profileKey, specs in pairs(type(rootRecords) == "table" and rootRecords or {}) do
             for specKey, spells in pairs(type(specs) == "table" and specs or {}) do
                 for recordedSpellID, triggers in pairs(type(spells) == "table" and spells or {}) do
                     for recordedTrigger, record in pairs(type(triggers) == "table" and triggers or {}) do
-                        local uidMatches = entryUID ~= "" and tostring(type(record) == "table" and record.entryUID or "") == entryUID
-                        local recordUID = tostring(type(record) == "table" and record.entryUID or "")
-                        local legacyMatches = recordUID == "" and tonumber(recordedSpellID) == spellID and tostring(recordedTrigger) == trigger
-                        if type(record) == "table" and (uidMatches or legacyMatches) then
+                        local uidMatches = tostring(type(record) == "table" and record.entryUID or "") == entryUID
+                        if type(record) == "table" and uidMatches then
                             found = true
                             local target = ResolveRecordedTarget(root, profileKey, specKey, tonumber(recordedSpellID), record)
                             if type(target) == "table" and target[record.field] == record.injectedValue then
                                 target[record.field] = record.previousValue
-                                if tostring(profileKey) == tostring(currentProfile) and tostring(specKey) == tostring(currentSpec) then currentChanged = true end
+                                if tostring(profileKey) == tostring(currentProfile)
+                                    and (record.family == "customActiveStates" or tostring(specKey) == tostring(currentSpec)) then currentChanged = true end
                             end
                             triggers[recordedTrigger] = nil
                         end
@@ -478,14 +569,24 @@ function Integration:RemoveEntry(entry, noRefresh)
     return removed, status, changed == true
 end
 
+function Integration:RemoveEntry(entry, noRefresh)
+    local uid = type(entry) == "table" and entry.entryUID or entry
+    if uid ~= nil and tostring(uid) ~= "" then
+        return self:RemoveEntryFromAllRecordedScopes(entry, noRefresh)
+    end
+    return false, "removed", false
+end
+
 function Integration:GetInjectionStatus(entry)
     if not EntryEnabled(entry) then return "disabled" end
+    if tostring(entry.injectionStatus or "") == "batch_complete" and type(entry.injectionStats) == "table" then return "batch_complete" end
     if NS.pendingEUISync and InCombatLockdown and InCombatLockdown() then return "waiting_combat" end
     if tostring(entry.soundSource or "") == "tts" or tostring(entry.notifyMode or "") == "tts" then return "unsupported_tts" end
-    if type(NS.FindEntryScope) == "function" and type(NS.GetCurrentClassSpec) == "function" then
-        local classID, specID = NS:FindEntryScope(entry)
+    if type(NS.GetCurrentClassSpec) == "function" then
         local currentClassID, currentSpecID = NS:GetCurrentClassSpec()
-        if classID ~= nil and ((classID ~= 0 and classID ~= currentClassID) or (specID ~= 0 and specID ~= currentSpecID)) then return "waiting_for_spec" end
+        local raceID = type(NS.GetCurrentRaceID) == "function" and NS:GetCurrentRaceID() or 0
+        local resolver = NS.Core and NS.Core.ScopeResolver
+        if resolver and not resolver:EntryMatchesScope(entry, currentClassID, currentSpecID, raceID) then return "waiting_for_spec" end
     end
     local readiness = NS.Core.EUISoundRegistry:GetNativeReadiness(entry)
     if readiness == "invalid_path" or readiness == "sharedmedia_missing" then return readiness end
@@ -539,3 +640,5 @@ function Integration:FindManagedTarget(spellID, trigger, entry)
 end
 
 Integration.ResolveFamily = ResolveTargetFamily
+function Integration:ResolveRootProfile(create) return ResolveRootProfile(create) end
+function Integration:ResolveContextForSpec(specID, create) return ResolveContextForSpec(specID, create) end

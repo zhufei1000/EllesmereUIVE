@@ -163,16 +163,15 @@ end)
 if syncBtn then
     syncBtn:SetScript("OnClick", function()
         syncBtn:SetEnabled(false)
-        NS:RequestEUISync("CONFIG_TOOLBAR", function(_, status, stats)
-            syncBtn:SetEnabled(true)
-            self:Refresh()
-            if status == "complete" and type(stats) == "table" then
-                NS:Print(NS.L("SYNC_SUMMARY", stats.injected or 0, stats.upToDate or 0, stats.waiting or 0,
-                    stats.reloadRequired or 0, stats.conflict or 0, stats.invalidSound or 0, stats.unsupported or 0))
-            else
-                NS:Print(NS.L("STATUS_" .. tostring(status or "saved_waiting_sync")))
-            end
-        end)
+        local _, status, stats = NS:SyncSelectedEUIEntries()
+        syncBtn:SetEnabled(true)
+        self:Refresh()
+        if status == "complete" and type(stats) == "table" then
+            NS:Print(NS.L("SYNC_SUMMARY", stats.injected or 0, stats.upToDate or 0, stats.waiting or 0,
+                stats.reloadRequired or 0, stats.conflict or 0, stats.invalidSound or 0, stats.unsupported or 0))
+        else
+            NS:Print(NS.L("STATUS_" .. tostring(status or "saved_waiting_sync")))
+        end
     end)
 end
 importBtn:SetScript("OnClick", function()

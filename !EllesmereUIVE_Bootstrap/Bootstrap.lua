@@ -151,6 +151,23 @@ local function ScopeIsCurrent(classID, specID)
     return (classID == 0 or classID == currentClassID) and (specID == 0 or specID == currentSpecID)
 end
 
+local function ScopeMapMatches(map, id)
+    if type(map) ~= "table" or next(map) == nil then return true end
+    return map[0] == true or map["0"] == true or map[id] == true or map[tostring(id)] == true
+end
+
+local function EntryMatchesCurrent(entry, storageClassID, storageSpecID)
+    local currentClassID, currentSpecID = GetCurrentClassSpec()
+    local currentRaceID = type(UnitRace) == "function" and tonumber(select(3, UnitRace("player"))) or 0
+    local classMap = type(entry.alertClassIDs) == "table" and next(entry.alertClassIDs) and entry.alertClassIDs or entry.customClassIDs
+    local specMap = type(entry.alertSpecIDs) == "table" and next(entry.alertSpecIDs) and entry.alertSpecIDs or entry.customSpecIDs
+    local raceMap = type(entry.alertRaceIDs) == "table" and next(entry.alertRaceIDs) and entry.alertRaceIDs or entry.customRaceIDs
+    classMap = classMap or { [tonumber(storageClassID) or 0] = true }
+    specMap = specMap or { [tonumber(storageSpecID) or 0] = true }
+    return ScopeMapMatches(classMap, currentClassID) and ScopeMapMatches(specMap, currentSpecID)
+        and ScopeMapMatches(raceMap, currentRaceID)
+end
+
 local function NormalizeTargetMode(entry)
     if type(entry) ~= "table" or entry.entryType ~= "euiVoice" then return end
     local family = tostring(entry.euiTargetFamily or "")
@@ -163,10 +180,10 @@ local function NormalizeTargetMode(entry)
     end
 end
 
-local function EnsureEUIContext()
+local function EnsureEUIContext(targetSpecID)
     local root = rawget(_G, "EllesmereUIDB")
     if type(root) ~= "table" then return nil, "waiting_for_eui" end
-    local specKey = GetSpecKey()
+    local specKey = tonumber(targetSpecID) and tostring(math.floor(tonumber(targetSpecID))) or GetSpecKey()
     if not specKey then return nil, "waiting_for_spec" end
     local profileKey = tostring(root.activeProfile or "Default")
     root.spellAssignments = type(root.spellAssignments) == "table" and root.spellAssignments or {}
@@ -314,11 +331,11 @@ local function ResolveCurrentRecordTarget(context, record, spellID)
     return type(store) == "table" and (store[spellID] or store[tostring(spellID)]) or nil
 end
 
-local function PreseedEntry(entry, classID, specID)
+local function PreseedEntry(entry, classID, specID, targetSpecID)
     if InCombatLockdown and InCombatLockdown() then return false, "waiting_combat" end
     if type(entry) ~= "table" or entry.entryType ~= "euiVoice" then return false, "unsupported_entry_type" end
     if entry.enabled == false or entry.voiceEnabled == false then return false, "disabled" end
-    if not ScopeIsCurrent(classID, specID) then return false, "waiting_for_spec" end
+    if not targetSpecID and not ScopeIsCurrent(classID, specID) then return false, "waiting_for_spec" end
     local spellID = tonumber(entry.spellId)
     local trigger = tostring(entry.euiTriggerType or "cdReady")
     local field = FIELD_BY_TRIGGER[trigger]
@@ -328,7 +345,7 @@ local function PreseedEntry(entry, classID, specID)
     if not soundKey then return false, registerStatus end
     local injectedValue = "sm:" .. soundKey
     local callOK, succeeded, changed, status = pcall(function()
-        local context, contextStatus = EnsureEUIContext()
+        local context, contextStatus = EnsureEUIContext(targetSpecID)
         if not context then return false, false, contextStatus end
         local resolvedFamily, familyStatus = ResolveTargetFamily(context, entry, spellID)
         if not resolvedFamily then return false, false, familyStatus end
@@ -370,7 +387,7 @@ local function PreseedEntry(entry, classID, specID)
             soundKey = injectedValue,
             previousValue = previousValue,
             injectedValue = injectedValue,
-            injectedAtVersion = "1.0.2",
+            injectedAtVersion = "1.0.3",
             family = family,
             field = field,
             customStateKey = family == "customActiveStates" and actualKey or nil,
@@ -390,13 +407,15 @@ end
 
 local function PreseedCurrentScope()
     local db = rawget(_G, "EllesmereUIVEDB")
-    local count, changed = 0, false
+    local count, changed, seenUID = 0, false, {}
     for classID, classMap in pairs(type(db) == "table" and type(db.specConfigs) == "table" and db.specConfigs or {}) do
         for specID, entries in pairs(type(classMap) == "table" and classMap or {}) do
-            if ScopeIsCurrent(classID, specID) then
-                for _, entry in pairs(type(entries) == "table" and entries or {}) do
+            for _, entry in pairs(type(entries) == "table" and entries or {}) do
+                local uid = type(entry) == "table" and tostring(entry.entryUID or "") or ""
+                if (uid == "" or not seenUID[uid]) and EntryMatchesCurrent(entry, classID, specID) then
                     local ok, _, entryChanged = PreseedEntry(entry, classID, specID)
                     if ok then count = count + 1; changed = entryChanged == true or changed end
+                    if uid ~= "" then seenUID[uid] = true end
                 end
             end
         end
@@ -456,6 +475,7 @@ function API.RegisterAllSavedEntries()
 end
 
 function API.PreseedEntry(entry, classID, specID) return PreseedEntry(entry, classID, specID) end
+function API.PreseedEntryForSpec(entry, classID, specID) return PreseedEntry(entry, classID, specID, specID) end
 function API.PreseedCurrentScope() return PreseedCurrentScope() end
 function API.EnsureEUIContext() return EnsureEUIContext() end
 

@@ -236,6 +236,15 @@ end
 
 local function GetEUIStatus(entry)
     if type(entry) ~= "table" or tostring(entry.entryType or "") ~= "euiVoice" then return nil, nil end
+    if tostring(entry.injectionStatus or "") == "batch_complete" and type(entry.injectionStats) == "table" then
+        local stats = entry.injectionStats
+        local targetCount = math.max(0, tonumber(stats.targetCount) or 0)
+        local synced = math.max(0, (tonumber(stats.injected) or 0) + (tonumber(stats.upToDate) or 0))
+        local parts = { L("BATCH_SYNCED", synced, targetCount) }
+        if (tonumber(stats.conflict) or 0) > 0 then parts[#parts + 1] = L("BATCH_CONFLICT", stats.conflict) end
+        if (tonumber(stats.waiting) or 0) > 0 then parts[#parts + 1] = L("BATCH_WAITING", stats.waiting) end
+        return "batch_complete", table.concat(parts, " · ")
+    end
     local integration = NS.Integrations and NS.Integrations.EllesmereUI
     local status = integration and type(integration.GetInjectionStatus) == "function"
         and integration:GetInjectionStatus(entry) or "saved_waiting_sync"
@@ -394,6 +403,11 @@ function SavedListLayout:GetSavedListLayoutForScope(owner, classID, specID, incl
             tostring(entry.entryType or "cooldown"),
             tostring(entry.euiTriggerType or ""),
             tostring(select(1, GetEUIStatus(entry)) or ""),
+            tostring(type(entry.injectionStats) == "table" and entry.injectionStats.targetCount or ""),
+            tostring(type(entry.injectionStats) == "table" and entry.injectionStats.injected or ""),
+            tostring(type(entry.injectionStats) == "table" and entry.injectionStats.upToDate or ""),
+            tostring(type(entry.injectionStats) == "table" and entry.injectionStats.waiting or ""),
+            tostring(type(entry.injectionStats) == "table" and entry.injectionStats.conflict or ""),
             tostring(entry.notifyMode or modeSound),
             tostring(entry.soundSource or ""),
             tostring(entry.soundPath or ""),
