@@ -242,7 +242,7 @@ local function StoreImportedEntry(source, forcedType, preferOriginalIndex, reuse
     entry.entryUID = NS.Core.Database:NextEntryUID()
     entry.entryUID = tostring(entry.entryUID)
     entry.classID, entry.specID = classID, specID
-    entry.injected, entry.injectionStatus = nil, nil
+    entry.injected, entry.injectionStatus, entry.injectionStats = nil, nil, nil
     list[index] = entry
     return entry, classID, specID, index, true
 end

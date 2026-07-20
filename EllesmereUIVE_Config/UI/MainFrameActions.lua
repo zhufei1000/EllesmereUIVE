@@ -165,6 +165,9 @@ if syncBtn then
         syncBtn:SetEnabled(false)
         local _, status, stats = NS:SyncSelectedEUIEntries()
         syncBtn:SetEnabled(true)
+        if NS.SavedListLayout and type(NS.SavedListLayout.InvalidateCache) == "function" then
+            NS.SavedListLayout:InvalidateCache()
+        end
         self:Refresh()
         if status == "complete" and type(stats) == "table" then
             NS:Print(NS.L("SYNC_SUMMARY", stats.injected or 0, stats.upToDate or 0, stats.waiting or 0,

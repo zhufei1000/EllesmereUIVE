@@ -72,16 +72,17 @@ end
 
 function Registry:RegisterEntry(entry)
     local key = self:BuildStableSoundKey(entry)
-    local path = self:ResolveSoundPath(entry)
-    if not key or path == "" then return nil, "invalid_path", false, false end
-
     local source = tostring(entry.soundSource or "custom")
     if source == "sharedmedia" then
-        local lsm = GetLSM()
-        local available = lsm and lsm.Fetch and lsm:Fetch("sound", key, true) ~= nil
-        entry.bootstrapMediaMissing = not available or nil
-        if not available then return nil, "sharedmedia_missing", false, false end
+        local readiness = self:IsSharedMediaReady(entry)
+        if readiness ~= "sharedmedia_ready" then return nil, readiness, false, false end
+        entry.soundKey = key
+        entry.requiresReload = false
+        return "sm:" .. key, readiness, false, true
     end
+
+    local path = self:ResolveSoundPath(entry)
+    if not key or path == "" then return nil, "invalid_path", false, false end
 
     local bridge = Bridge()
     local bridgeStatus
@@ -95,8 +96,7 @@ function Registry:RegisterEntry(entry)
     local cdmLoaded = bridge and bridge:IsCDMLoaded() == true or false
     local nativeReady = not cdmLoaded or registeredBeforeEUI
     local status
-    if source == "sharedmedia" then status = "sharedmedia_ready"
-    elseif registeredBeforeEUI then status = "registered_before_eui"
+    if registeredBeforeEUI then status = "registered_before_eui"
     else status = cdmLoaded and "requires_reload" or (bridgeStatus or "registered_late") end
     if cdmLoaded and not registeredBeforeEUI then status, nativeReady = "requires_reload", false end
     entry.soundKey = key
@@ -105,7 +105,22 @@ function Registry:RegisterEntry(entry)
     return "sm:" .. key, status, mediaChanged, nativeReady
 end
 
+function Registry:IsSharedMediaReady(entry)
+    local key = type(entry) == "table" and tostring(entry.sharedMediaSound or "") or ""
+    if key == "" then return "sharedmedia_missing" end
+    local lsm = GetLSM()
+    local path = lsm and lsm.Fetch and lsm:Fetch("sound", key, true) or nil
+    entry.bootstrapMediaMissing = path == nil or nil
+    if not path then return "sharedmedia_missing" end
+    entry.soundKey = key
+    entry.requiresReload = false
+    return "sharedmedia_ready"
+end
+
 function Registry:GetNativeReadiness(entry)
+    if tostring(entry and entry.soundSource or "") == "sharedmedia" then
+        return self:IsSharedMediaReady(entry) == "sharedmedia_ready" and "ready" or "sharedmedia_missing"
+    end
     local _, status, _, nativeReady = self:RegisterEntry(entry)
     if status == "invalid_path" or status == "sharedmedia_missing" then return status end
     if not nativeReady then return "requires_reload" end

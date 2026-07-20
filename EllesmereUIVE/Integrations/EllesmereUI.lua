@@ -4,6 +4,7 @@ _G.EllesmereUIVENS = NS
 NS.Integrations = NS.Integrations or {}
 NS.Integrations.EllesmereUI = NS.Integrations.EllesmereUI or {}
 local Integration = NS.Integrations.EllesmereUI
+NS.RuntimeInjectionStats = NS.RuntimeInjectionStats or {}
 
 local FIELD_BY_TRIGGER = {
     cdReady = "cdReadySoundKey",
@@ -326,6 +327,25 @@ local function IsOwnedValue(value)
     return type(value) == "string" and value:find("^sm:EUIVE_") ~= nil
 end
 
+local function SaveRuntimeStats(entry, stats)
+    if type(NS.SetRuntimeInjectionStats) == "function" then
+        NS:SetRuntimeInjectionStats(entry, stats)
+        return
+    end
+    local uid = type(entry) == "table" and tostring(entry.entryUID or "") or ""
+    if uid == "" then return end
+    NS.RuntimeInjectionStats[uid] = {
+        targetCount = tonumber(stats and stats.targetCount) or 0,
+        injected = tonumber(stats and stats.injected) or 0,
+        upToDate = tonumber(stats and stats.upToDate) or 0,
+        waiting = tonumber(stats and stats.waiting) or 0,
+        conflict = tonumber(stats and stats.conflict) or 0,
+        invalidSound = tonumber(stats and stats.invalidSound) or 0,
+        unsupported = tonumber(stats and stats.unsupported) or 0,
+        reloadRequired = tonumber(stats and stats.reloadRequired) or 0,
+    }
+end
+
 function Integration:IsAvailable()
     local context, status = ResolveContext(false)
     return context ~= nil, status or "available"
@@ -478,7 +498,7 @@ local function ApplyPlan(context, plan)
         soundKey = plan.injectedValue,
         previousValue = previousValue,
         injectedValue = plan.injectedValue,
-        injectedAtVersion = NS.VERSION or "1.0.3",
+        injectedAtVersion = NS.VERSION or "1.0.4",
         family = plan.family,
         field = plan.field,
         customStateKey = plan.family == "customActiveStates" and (actualKey or plan.actualKey) or nil,
@@ -555,7 +575,10 @@ function Integration:InjectEntryToTargets(entry, targets, overwrite, noRefresh)
             local plan, planStatus = BuildPlan(self, context, entry, overwrite)
             status = planStatus or "pending"
             if plan then
-                if not plan.fieldChanged and not plan.mediaChanged then status = "up_to_date" end
+                if not plan.fieldChanged and not plan.mediaChanged
+                    and (planStatus == "native_ready" or planStatus == "custom_state_injected" or planStatus == "item_id_injected") then
+                    status = "up_to_date"
+                end
                 local customKey = plan.family == "customActiveStates" and table.concat({ context.profileKey, plan.lookupID, plan.trigger }, ":") or nil
                 if customKey and seenCustom[customKey] then
                     status = "up_to_date"
@@ -587,17 +610,7 @@ function Integration:InjectAllTargets(entries, overwrite)
         local targets = resolver and resolver:ResolveEntryTargets(entry) or {}
         local _, status, stats = self:InjectEntryToTargets(entry, targets, overwrite, true)
         output[entry] = status
-        entry.injectionStatus = status
-        entry.injectionStats = {
-            targetCount = tonumber(stats.targetCount) or 0,
-            injected = tonumber(stats.injected) or 0,
-            upToDate = tonumber(stats.upToDate) or 0,
-            waiting = tonumber(stats.waiting) or 0,
-            conflict = tonumber(stats.conflict) or 0,
-            invalidSound = tonumber(stats.invalidSound) or 0,
-            unsupported = tonumber(stats.unsupported) or 0,
-            reloadRequired = tonumber(stats.reloadRequired) or 0,
-        }
+        SaveRuntimeStats(entry, stats)
         for _, key in ipairs({ "targetCount", "injected", "upToDate", "waiting", "conflict", "invalidSound", "unsupported", "disabled", "reloadRequired" }) do
             total[key] = (tonumber(total[key]) or 0) + (tonumber(stats[key]) or 0)
         end
@@ -638,6 +651,12 @@ function Integration:InjectAll(entries, overwrite)
             if applied and not plan.requiresReload then liveChanged = true end
         end
         stats.changed = changed
+        for entry, entryStatus in pairs(output) do
+            local entryStats = NewStats()
+            entryStats.targetCount = 1
+            CountStatus(entryStats, entryStatus)
+            SaveRuntimeStats(entry, entryStats)
+        end
         if liveChanged then self:Refresh() end
         return output, "complete"
     end)
@@ -713,7 +732,6 @@ end
 
 function Integration:GetInjectionStatus(entry)
     if not EntryEnabled(entry) then return "disabled" end
-    if tostring(entry.injectionStatus or "") == "batch_complete" and type(entry.injectionStats) == "table" then return "batch_complete" end
     if NS.pendingEUISync and InCombatLockdown and InCombatLockdown() then return "waiting_combat" end
     if tostring(entry.soundSource or "") == "tts" or tostring(entry.notifyMode or "") == "tts" then return "unsupported_tts" end
     if type(NS.GetCurrentClassSpec) == "function" then
@@ -722,8 +740,6 @@ function Integration:GetInjectionStatus(entry)
         local resolver = NS.Core and NS.Core.ScopeResolver
         if resolver and not resolver:EntryMatchesScope(entry, currentClassID, currentSpecID, raceID) then return "waiting_for_spec" end
     end
-    local readiness = NS.Core.EUISoundRegistry:GetNativeReadiness(entry)
-    if readiness == "invalid_path" or readiness == "sharedmedia_missing" then return readiness end
     local context, status = ResolveContext(false)
     if not context then return status end
     local trigger = tostring(entry.euiTriggerType or "cdReady")
@@ -732,18 +748,23 @@ function Integration:GetInjectionStatus(entry)
     local identifier, identifierStatus = ResolveManagedIdentifier(context, entry)
     if not identifier then return identifierStatus end
     local family, lookupID = identifier.family, identifier.lookupID
+    if identifier.objectType == "spell" and not IsSkillPresent(context, lookupID) then return "waiting_for_skill" end
     local target, _, targetStatus = ResolveTarget(context, family, lookupID, false)
     if targetStatus then return targetStatus end
     local value = type(target) == "table" and target[field] or nil
     local records = GetRecordTable(context.profileKey, context.specKey, identifier.recordID, false)
     local record = records and records[trigger] or nil
+    if not IsEmpty(value) and not IsOwnedValue(value)
+        and not (type(record) == "table" and value == record.injectedValue) then return "conflict" end
+    local readiness = NS.Core.EUISoundRegistry:GetNativeReadiness(entry)
+    if readiness == "invalid_path" or readiness == "sharedmedia_missing" then return readiness end
     if type(record) == "table" and value == record.injectedValue then
-        if identifier.objectType == "spell" and not IsSkillPresent(context, lookupID) then return "waiting_for_skill" end
-        if readiness == "requires_reload" or record.requiresReload == true then return "requires_reload" end
+        if readiness == "requires_reload" then return "requires_reload" end
+        record.requiresReload = false
+        entry.requiresReload = false
         if identifier.objectType == "item" then return "item_id_injected" end
         return family == "customActiveStates" and "custom_state_injected" or "native_ready"
     end
-    if not IsEmpty(value) and not IsOwnedValue(value) then return "conflict" end
     return "saved_waiting_sync"
 end
 
